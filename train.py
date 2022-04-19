@@ -95,7 +95,10 @@ def main(args):
         continue
       sents = sents.cuda()
       optimizer.zero_grad()
-      nll, kl, binary_matrix, argmax_spans = model(sents, argmax=True)      
+      # if b % args.print_every == 0:
+      nll, kl, (trees, argmax_spans) = model(sents, argmax=True)      
+      # else:
+        # nll, kl = model(sents, argmax=False)
       (nll+kl).mean().backward()
       train_nll += nll.sum().item()
       train_kl += kl.sum().item()
@@ -121,7 +124,8 @@ def main(args):
                np.exp((train_nll + train_kl)/num_words), best_val_ppl, best_val_f1, 
                all_f1[0], num_sents / (time.time() - start_time)))
         # print an example parse
-        tree = get_tree_from_binary_matrix(binary_matrix[0], length)
+        # tree = get_tree_from_binary_matrix(binary_matrix[0], length)
+        tree = trees[0]
         action = get_actions(tree)
         sent_str = [train_data.idx2word[word_idx] for word_idx in list(sents[0].cpu().numpy())]
         print("Pred Tree: %s" % get_tree(action, sent_str))
@@ -162,7 +166,7 @@ def eval(data, model):
       # note that for unsuperised parsing, we should do model(sents, argmax=True, use_mean = True)
       # but we don't for eval since we want a valid upper bound on PPL for early stopping
       # see eval.py for proper MAP inference
-      nll, kl, binary_matrix, argmax_spans = model(sents, argmax=True)
+      nll, kl, (argmax_trees, argmax_spans) = model(sents, argmax=True)
       total_nll += nll.sum().item()
       total_kl  += kl.sum().item()
       num_sents += batch_size
