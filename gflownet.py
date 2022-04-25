@@ -93,7 +93,7 @@ class GFlowNet_forward_tag(nn.Module):
         self.to_tok = nn.Sequential(nn.LayerNorm(d_model), nn.Linear(d_model, d_model),
                                         nn.ReLU(), nn.Linear(d_model, n_nts))
 
-    def forward(self, x, uniform_pos=False, t_to_nt=False):
+    def forward(self, x):
         pos_logits = self.to_pos(x)
         tok_logits = self.to_tok(x)
         return torch.cat([pos_logits, tok_logits], dim=-1)
@@ -102,7 +102,7 @@ class GFlowNet_backward(nn.Module):
     '''
     We pick <split> token one at a time for deletion
     '''
-    def __init__(self, d_model, n_nts, n_vocab):
+    def __init__(self, d_model):
         nn.Module.__init__(self)
         self.d_model = d_model
         self.to_pos = nn.Sequential(nn.LayerNorm(d_model), nn.Linear(d_model, d_model),
@@ -112,28 +112,27 @@ class GFlowNet_backward(nn.Module):
         pos_logits = self.to_pos(x).squeeze(-1)
         return pos_logits
 
-class segmenter_controller():
+class ar_segmenter_controller():
     def __init__(self, device, args):
         self.device = device
         self.args = args
 
-    def sample_forward_split(self,
+    def sample_forward(self,
+                    action : str,
                     F_logits: torch.Tensor,
                     states: torch.Tensor,
                     greedy: bool = False,
-                    temperature : float = 1.,
                     temperature_pos : float = -1.,):
-        raise NotImplementedError
+        F_actions = self._sample_forward_actions(action, F_logits, greedy, temperature_pos)
+        P_F = self.calc_forward_prob(F_logits=F_logits,
+                                            F_actions=F_actions,
+                                            states=states)
+        states = self.apply_forward_actions(states, F_actions)
+        return states, F_actions, P_F
     
-    def sample_forward_tag(self,
-                    F_logits: torch.Tensor,
-                    states: torch.Tensor,
-                    greedy: bool = False,
-                    temperature : float = 1.,
-                    temperature_pos : float = -1.,):
-        raise NotImplementedError
 
-    def batch_calc_forward_prob(self,
+    def calc_forward_prob(self,
+                        action : str,
                         F_logits: torch.Tensor,
                         states: torch.Tensor, 
                         F_actions: tuple = None,
@@ -141,14 +140,24 @@ class segmenter_controller():
                         temperature_pos: float = 1.0):
         raise NotImplementedError
 
-    @torch.no_grad()
-    def batch_apply_forward_actions(self,
-                            states: torch.Tensor,
-                            F_actions: list):
+    def _sample_forward_actions(self,
+                                action : str,
+                                F_logits: torch.Tensor,
+                                greedy: bool = False,
+                                temperature_pos : float = 1.,):
         raise NotImplementedError
 
     @torch.no_grad()
-    def batch_reverse_forward_actions(self,
+    def apply_forward_actions(self,
+                            states: torch.Tensor,
+                            F_actions: tuple):
+        '''
+        F_actions is a tuple of three things
+        '''
+        raise NotImplementedError
+
+    @torch.no_grad()
+    def reverse_forward_actions(self,
                                 states: torch.Tensor,
                                 F_actions: list):
         raise NotImplementedError
@@ -158,9 +167,14 @@ class segmenter_controller():
                         states: torch.Tensor,
                         greedy: bool = False,
                         temperature_pos : float = -1.):
-        raise NotImplementedError
+        B_actions = self._sample_backward_actions(B_logits, greedy, temperature_pos)
+        P_B = self.calc_backward_prob(B_logits=B_logits,
+                                    B_actions=B_actions,
+                                    states=states)
+        states = self.apply_backward_actions(states, B_actions)
+        return states, B_actions, P_B
 
-    def batch_calc_backward_prob(self,
+    def calc_backward_prob(self,
                         B_logits: torch.Tensor,
                         states: torch.Tensor,
                         B_actions: torch.Tensor = None,
@@ -168,14 +182,20 @@ class segmenter_controller():
                         temperature_pos: float = 1.0):
         raise NotImplementedError
 
+    def _sample_backward_actions(self,
+                                B_logits: torch.Tensor,
+                                greedy: bool = False,
+                                temperature_pos : float = -1.,):
+        raise NotImplementedError
+
     @torch.no_grad()
-    def batch_apply_backward_actions(self,
+    def apply_backward_actions(self,
                             states: torch.Tensor,
                             B_actions: torch.Tensor):
         raise NotImplementedError
 
     @torch.no_grad()
-    def batch_reverse_backward_actions(self,
+    def reverse_backward_actions(self,
                                 states: torch.Tensor,
                                 B_actions: torch.Tensor):
         raise NotImplementedError
