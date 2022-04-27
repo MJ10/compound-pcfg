@@ -205,7 +205,30 @@ class ar_segmenter_controller():
     def calc_reward(self, to_calc):
         return self.calc_log_reward(to_calc).exp()
 
-    @torch.no_grad()
-    def calc_log_reward(self, to_calc):
-        raise NotImplementedError
+    # @torch.no_grad()
+    # removing torch.no_grad here, since we can reuse this function as a loss for training of the PCFG and of the AR model
+
+    def calc_log_reward(self, seqs):
+        spans = []
+        tag_seqs = []
+
+        for seq in seqs:
+            nt_positions = torch.nonzero(seq > self.n_vocab)
+            p = [-1] + list(nt_positions.cpu().numpy())
+            spans += [ seq[p[i]+1:p[i+1]] for i in range(len(p)) ]
+            tag_seqs.append(seq[nt_positions])
+
+        x = torch.nn.utils.rnn.pad_sequence(spans, batch_first=True)
+        lengths = torch.Tensor(list(map(len, spans))).to(x.device)
+        tree_lls = self.pcfg.batch_marginal_with_roots(self, x, lengths, torch.cat(tag_seqs, 0))
+
+        x_tag = torch.nn.utils.rnn.pad_sequence(tag_seqs)
+        ar_lls = None # score x_tag using the AR model
+
+        lr = torch.zeros((len(seqs),), device=x.device)
+        start = 0
+        for i, ar_ll, tag_seq in zip(range(len(seqs)), ar_lls, tag_seqs):
+            lr[i] = ar_ll + tree_lls[start:start+len(tag_seq)]
+            start += len(tag_seq)
     
+        return lr
