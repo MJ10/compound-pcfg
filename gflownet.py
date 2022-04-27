@@ -213,7 +213,7 @@ class ar_segmenter_controller():
         tag_seqs = []
 
         for seq in seqs:
-            nt_positions = torch.nonzero(seq > self.n_vocab)
+            nt_positions = torch.nonzero(seq >= self.n_vocab)
             p = [-1] + list(nt_positions.cpu().numpy())
             spans += [ seq[p[i]+1:p[i+1]] for i in range(len(p)) ]
             tag_seqs.append(seq[nt_positions])
