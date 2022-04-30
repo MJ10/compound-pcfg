@@ -149,18 +149,44 @@ class ar_segmenter_controller():
 
     @torch.no_grad()
     def apply_forward_actions(self,
-                            states: torch.Tensor,
+                            states: list,
                             F_actions: tuple):
         '''
+        states is a list of tensors
         F_actions is a tuple of three things
         '''
-        raise NotImplementedError
+        actions, positions, tokens = F_actions
+        for i, (action, pos, tok) in enumerate(zip(actions, positions, tokens)):
+            if action == "none":
+                continue
+            elif action == "split":
+                # insert a split symbol at pos
+                states[i] = torch.cat([states[i][:pos], torch.zeros(1).to(self.device)+self.split_sym, states[i][pos:]], dim=0)
+            elif action == "tag":
+                # change the pos-th split symbol to tok
+                states[i][states[i]==self.split_sym][pos] = tok # need to verify that this actually modifies states
+        return states
 
     @torch.no_grad()
     def reverse_forward_actions(self,
                                 states: torch.Tensor,
                                 F_actions: list):
-        raise NotImplementedError
+        actions, positions, _ = F_actions
+        B_actions = []
+        B_positions = []
+        for i, (action, pos) in enumerate(zip(actions, positions)):
+            if action == "none":
+                B_actions.append('none')
+                B_positions.append(0)
+            elif action == "split":
+                B_actions.append('merge')
+                # return the index of the split symbol at pos
+                B_positions.append((states[i][:pos]==self.split_sym).sum().item())
+            elif action == "tag":
+                B_actions.append('untag')
+                # return the index of the split symbol at pos
+                B_positions.append((states[i][:pos]==self.split_sym).sum().item())
+        return (B_actions, B_positions)
 
     def sample_backward(self, 
                         B_logits: torch.Tensor,
@@ -192,13 +218,42 @@ class ar_segmenter_controller():
     def apply_backward_actions(self,
                             states: torch.Tensor,
                             B_actions: torch.Tensor):
-        raise NotImplementedError
+        actions, positions = B_actions
+        for i, (action, pos) in enumerate(zip(actions, positions)):
+            if action == "none":
+                continue
+            elif action == "merge":
+                # remove the split symbol at pos
+                states[i] = torch.cat([states[i][:pos], states[i][pos+1:]], dim=0)
+            elif action == "untag":
+                # change the pos-th symbol to a split symbol
+                states[i][states[i]>=self.split_sym][pos] = self.split_sym # need to verify that this actually modifies states
+        return states
 
     @torch.no_grad()
     def reverse_backward_actions(self,
                                 states: torch.Tensor,
                                 B_actions: torch.Tensor):
-        raise NotImplementedError
+        actions, positions = B_actions
+        F_actions = []
+        F_positions = []
+        F_tokens = []
+        for i, (action, pos) in enumerate(zip(actions, positions)):
+            if action == "none":
+                F_actions.append('none')
+                F_positions.append(0)
+                F_tokens.append(0)
+            elif action == "merge":
+                F_actions.append('split')
+                # return the index of the pos-th split symbol minus 1
+                F_positions.append(torch.nonzero(states[i]==self.split_sym, as_tuple=True)[0][pos]-1)
+                F_tokens.append(0)
+            elif action == "untag":
+                F_actions.append('tag')
+                # return the index of the pos-th split symbol minus 1
+                F_positions.append(torch.nonzero(states[i]==self.split_sym, as_tuple=True)[0][pos]-1)
+                F_tokens.append(states[i][F_positions[-1]+1])
+        return (F_actions, F_positions, F_tokens)
     
 
     @torch.no_grad()
