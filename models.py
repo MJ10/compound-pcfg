@@ -65,7 +65,7 @@ class CompPCFG(nn.Module):
     result =  -0.5 * (logvar - torch.pow(mean, 2)- torch.exp(logvar) + 1)
     return result
 
-  def forward(self, x, argmax=False, use_mean=False):
+  def forward(self, x, lengths, argmax=False, use_mean=False):
     #x : batch x n
     n = x.size(1)
     batch_size = x.size(0)
@@ -103,14 +103,14 @@ class CompPCFG(nn.Module):
     rule_score = F.log_softmax(self.rule_mlp(nt_emb), 2) # nt x t**2
     rule_scores = rule_score.view(batch_size, self.nt_states, self.all_states, self.all_states)
     params = (unary, rule_scores, root_scores)
-    dist = SentCFG(params, lengths=torch.tensor([x.shape[1]] * x.shape[0]))
+    dist = SentCFG(params, lengths=torch.tensor(lengths))
     log_Z = dist.partition
     if self.z_dim == 0:
       kl = torch.zeros_like(log_Z)
     if argmax:
       with torch.no_grad():
         spans = dist.argmax[-1]
-        argmax_spans, argmax_trees = extract_parses(spans, [x.shape[1]] * x.shape[0], inc=1)
+        argmax_spans, argmax_trees = extract_parses(spans, lengths, inc=1)
       return -log_Z, kl, (argmax_trees, argmax_spans)
     else:
       return -log_Z, kl

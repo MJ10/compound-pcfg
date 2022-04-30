@@ -13,7 +13,7 @@ from torch import cuda
 import numpy as np
 import time
 import logging
-from data import Dataset
+from data import Dataset, MinimalDataset
 from utils import *
 from models import CompPCFG
 from torch.nn.init import xavier_uniform_
@@ -23,6 +23,7 @@ parser = argparse.ArgumentParser()
 # Data path options
 parser.add_argument('--train_file', default='data/ptb-train.pkl')
 parser.add_argument('--val_file', default='data/ptb-val.pkl')
+parser.add_argument('--data', default='data/pcfg_1')
 parser.add_argument('--save_path', default='compound-pcfg.pt', help='where to save the model')
 
 # Model options
@@ -44,19 +45,36 @@ parser.add_argument('--final_max_length', default=40, type=int, help='final max 
 parser.add_argument('--beta1', default=0.75, type=float, help='beta1 for adam')
 parser.add_argument('--beta2', default=0.999, type=float, help='beta2 for adam')
 parser.add_argument('--gpu', default=0, type=int, help='which gpu to use')
+parser.add_argument('--batch_size', default=4, type=int, help='which gpu to use')
 parser.add_argument('--seed', default=3435, type=int, help='random seed')
 parser.add_argument('--print_every', type=int, default=1000, help='print stats after N batches')
+parser.add_argument('--minimal_dataloader', action="store_true")
 
 def main(args):
   np.random.seed(args.seed)
   torch.manual_seed(args.seed)
-  train_data = Dataset(args.train_file)
-  val_data = Dataset(args.val_file)  
-  train_sents = train_data.batch_size.sum()
-  vocab_size = int(train_data.vocab_size)    
-  max_len = max(val_data.sents.size(1), train_data.sents.size(1))
-  print('Train: %d sents / %d batches, Val: %d sents / %d batches' % 
-        (train_data.sents.size(0), len(train_data), val_data.sents.size(0), len(val_data)))
+  if args.minimal_dataloader:
+    corpus = MinimalDataset(args.data, 1000, batch_size=args.batch_size,
+                              batch_group_size=999999, add_master_token=False)
+    train_data = corpus.train
+    train_lens = corpus.train_lens
+    # print(train_data[0])
+    # import pdb;pdb.set_trace();
+    val_data = corpus.valid
+    val_lens = corpus.valid_lens
+    vocab_size = len(corpus.dict.idx2word)  
+    max_len = train_data.shape[1]
+    print('Train: %d sents / %d batches, Val: %d sents / %d batches' % 
+        (train_data.size(0), len(train_data), val_data.size(0), len(val_data)))
+  else:
+    train_data = Dataset(args.train_file)
+    val_data = Dataset(args.val_file)  
+    train_sents = train_data.batch_size.sum()
+    vocab_size = int(train_data.vocab_size)
+    max_len = max(val_data.sents.size(1), train_data.sents.size(1))
+  
+    print('Train: %d sents / %d batches, Val: %d sents / %d batches' % 
+          (train_data.sents.size(0), len(train_data), val_data.sents.size(0), len(val_data)))
   print('Vocab size: %d, Max Sent Len: %d' % (vocab_size, max_len))
   print('Save Path', args.save_path)
   cuda.set_device(args.gpu)
@@ -90,13 +108,29 @@ def main(args):
     b = 0
     for i in np.random.permutation(len(train_data)):
       b += 1
-      sents, length, batch_size, _, gold_spans, gold_binary_trees, _ = train_data[i]      
-      if length > args.max_length or length == 1: #length filter based on curriculum 
-        continue
-      sents = sents.cuda()
-      optimizer.zero_grad()
+      if args.minimal_dataloader:
+        sents = train_data[i]
+        lengths = train_lens[i]
+        batch_size = args.batch_size
+        sents = sents.cuda()
+        optimizer.zero_grad()
+        nll, kl, (trees, argmax_spans) = model(sents, lengths, argmax=True)
+        num_sents += batch_size
+        num_words += sum(lengths) # we implicitly generate </s> so we explicitly count it
+
+      else:
+        sents, length, batch_size, _, gold_spans, gold_binary_trees, _ = train_data[i]      
+        
+        if length > args.max_length or length == 1: #length filter based on curriculum 
+          continue
+        sents = sents.cuda()
+        optimizer.zero_grad()
+        nll, kl, (trees, argmax_spans) = model(sents, [length] * batch_size, argmax=True)
+        num_sents += batch_size
+        num_words += batch_size * (length+1) # we implicitly generate </s> so we explicitly count it
+
       # if b % args.print_every == 0:
-      nll, kl, (trees, argmax_spans) = model(sents, argmax=True)      
+      # nll, kl, (trees, argmax_spans) = model(sents, lengths, argmax=True)      
       # else:
         # nll, kl = model(sents, argmax=False)
       (nll+kl).mean().backward()
@@ -104,52 +138,63 @@ def main(args):
       train_kl += kl.sum().item()
       torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)      
       optimizer.step()
-      num_sents += batch_size
-      num_words += batch_size * (length + 1) # we implicitly generate </s> so we explicitly count it
-      for bb in range(batch_size):
-        span_b = [(a[0], a[1]) for a in argmax_spans[bb]] #ignore labels
-        span_b_set = set(span_b[:-1])
-        update_stats(span_b_set, [set(gold_spans[bb][:-1])], all_stats)
+      if not args.minimal_dataloader:
+        for bb in range(batch_size):
+          span_b = [(a[0], a[1]) for a in argmax_spans[bb]] #ignore labels
+          span_b_set = set(span_b[:-1])
+          update_stats(span_b_set, [set(gold_spans[bb][:-1])], all_stats)
       if b % args.print_every == 0:
-        all_f1 = get_f1(all_stats)
+        if not args.minimal_dataloader:
+          all_f1 = get_f1(all_stats)
         param_norm = sum([p.norm()**2 for p in model.parameters()]).item()**0.5
         gparam_norm = sum([p.grad.norm()**2 for p in model.parameters() 
                            if p.grad is not None]).item()**0.5
-        log_str = 'Epoch: %d, Batch: %d/%d, |Param|: %.6f, |GParam|: %.2f,  LR: %.4f, ' + \
-                  'ReconPPL: %.2f, KL: %.4f, PPLBound: %.2f, ValPPL: %.2f, ValF1: %.2f, ' + \
-                  'CorpusF1: %.2f, Throughput: %.2f examples/sec'
-        print(log_str %
-              (epoch, b, len(train_data), param_norm, gparam_norm, args.lr, 
-               np.exp(train_nll / num_words), train_kl /num_sents, 
-               np.exp((train_nll + train_kl)/num_words), best_val_ppl, best_val_f1, 
-               all_f1[0], num_sents / (time.time() - start_time)))
+        if args.minimal_dataloader:
+          log_str = 'Epoch: %d, Batch: %d/%d, |Param|: %.6f, |GParam|: %.2f,  LR: %.4f, ' + \
+                    'ReconPPL: %.2f, KL: %.4f, PPLBound: %.2f, ValPPL: %.2f, ' + \
+                    'Throughput: %.2f examples/sec'
+          print(log_str %
+                (epoch, b, len(train_data), param_norm, gparam_norm, args.lr, 
+                np.exp(train_nll / num_words), train_kl /num_sents, 
+                np.exp((train_nll + train_kl)/num_words), best_val_ppl, 
+                num_sents / (time.time() - start_time)))
+        else:
+          log_str = 'Epoch: %d, Batch: %d/%d, |Param|: %.6f, |GParam|: %.2f,  LR: %.4f, ' + \
+                    'ReconPPL: %.2f, KL: %.4f, PPLBound: %.2f, ValPPL: %.2f, ValF1: %.2f, ' + \
+                    'CorpusF1: %.2f, Throughput: %.2f examples/sec'
+          print(log_str %
+                (epoch, b, len(train_data), param_norm, gparam_norm, args.lr, 
+                np.exp(train_nll / num_words), train_kl /num_sents, 
+                np.exp((train_nll + train_kl)/num_words), best_val_ppl, best_val_f1, 
+                all_f1[0], num_sents / (time.time() - start_time)))
         # print an example parse
         # tree = get_tree_from_binary_matrix(binary_matrix[0], length)
         tree = trees[0]
         action = get_actions(tree)
-        sent_str = [train_data.idx2word[word_idx] for word_idx in list(sents[0].cpu().numpy())]
+        sent_str = [corpus.dict.idx2word[word_idx] for word_idx in list(sents[0].cpu().numpy())]
         print("Pred Tree: %s" % get_tree(action, sent_str))
-        print("Gold Tree: %s" % get_tree(gold_binary_trees[0], sent_str))
+        if not args.minimal_dataloader:
+          print("Gold Tree: %s" % get_tree(gold_binary_trees[0], sent_str))
 
     args.max_length = min(args.final_max_length, args.max_length + args.len_incr)
     print('--------------------------------')
     print('Checking validation perf...')    
-    val_ppl, val_f1 = eval(val_data, model)
+    val_ppl, val_f1 = eval(val_data, val_lens, model)
     print('--------------------------------')
     if val_ppl < best_val_ppl:
       best_val_ppl = val_ppl
-      best_val_f1 = val_f1
+      # best_val_f1 = val_f1
       checkpoint = {
         'args': args.__dict__,
         'model': model.cpu(),
-        'word2idx': train_data.word2idx,
-        'idx2word': train_data.idx2word
+        'word2idx': corpus.dict.word2idx,
+        'idx2word': corpus.dict.idx2word
       }
       print('Saving checkpoint to %s' % args.save_path)
       torch.save(checkpoint, args.save_path)
       model.cuda()
 
-def eval(data, model):
+def eval(data, data_lens, model):
   model.eval()
   num_sents = 0
   num_words = 0
@@ -159,53 +204,66 @@ def eval(data, model):
   sent_f1 = [] 
   with torch.no_grad():
     for i in range(len(data)):
-      sents, length, batch_size, _, gold_spans, gold_binary_trees, other_data = data[i] 
-      if length == 1:
-        continue
-      sents = sents.cuda()
+      if args.minimal_dataloader:
+        sents = data[i]
+        lengths = data_lens[i]
+        batch_size = args.batch_size
+        num_sents += batch_size
+        num_words += sum(lengths) # we implicitly generate </s> so we explicitly count it
+      
+      else:
+        sents, length, batch_size, _, gold_spans, gold_binary_trees, other_data = data[i] 
+        if length == 1:
+          continue
+        lengths = [lengths] * batch_size
+        num_sents += batch_size
+        num_words += batch_size*(length +1) # we implicitly generate </s> so we explicitly count it
+      
       # note that for unsuperised parsing, we should do model(sents, argmax=True, use_mean = True)
       # but we don't for eval since we want a valid upper bound on PPL for early stopping
       # see eval.py for proper MAP inference
-      nll, kl, (argmax_trees, argmax_spans) = model(sents, argmax=True)
+      sents = sents.cuda()
+      nll, kl, (argmax_trees, argmax_spans) = model(sents, lengths, argmax=True)
       total_nll += nll.sum().item()
       total_kl  += kl.sum().item()
-      num_sents += batch_size
-      num_words += batch_size*(length +1) # we implicitly generate </s> so we explicitly count it
-      for b in range(batch_size):
-        span_b = [(a[0], a[1]) for a in argmax_spans[b]] #ignore labels
-        span_b_set = set(span_b[:-1])        
-        gold_b_set = set(gold_spans[b][:-1])
-        tp, fp, fn = get_stats(span_b_set, gold_b_set) 
-        corpus_f1[0] += tp
-        corpus_f1[1] += fp
-        corpus_f1[2] += fn
-        # sent-level F1 is based on L83-89 from https://github.com/yikangshen/PRPN/test_phrase_grammar.py
+      if not args.minimal_dataloader:
+        for b in range(batch_size):
+          span_b = [(a[0], a[1]) for a in argmax_spans[b]] #ignore labels
+          span_b_set = set(span_b[:-1])        
+          gold_b_set = set(gold_spans[b][:-1])
+          tp, fp, fn = get_stats(span_b_set, gold_b_set) 
+          corpus_f1[0] += tp
+          corpus_f1[1] += fp
+          corpus_f1[2] += fn
+          # sent-level F1 is based on L83-89 from https://github.com/yikangshen/PRPN/test_phrase_grammar.py
 
-        model_out = span_b_set
-        std_out = gold_b_set
-        overlap = model_out.intersection(std_out)
-        prec = float(len(overlap)) / (len(model_out) + 1e-8)
-        reca = float(len(overlap)) / (len(std_out) + 1e-8)
-        if len(std_out) == 0:
-          reca = 1. 
-          if len(model_out) == 0:
-            prec = 1.
-        f1 = 2 * prec * reca / (prec + reca + 1e-8)
-        sent_f1.append(f1)
-  tp, fp, fn = corpus_f1  
-  prec = tp / (tp + fp)
-  recall = tp / (tp + fn)
-  corpus_f1 = 2*prec*recall/(prec+recall) if prec+recall > 0 else 0.
-  sent_f1 = np.mean(np.array(sent_f1))
+          model_out = span_b_set
+          std_out = gold_b_set
+          overlap = model_out.intersection(std_out)
+          prec = float(len(overlap)) / (len(model_out) + 1e-8)
+          reca = float(len(overlap)) / (len(std_out) + 1e-8)
+          if len(std_out) == 0:
+            reca = 1. 
+            if len(model_out) == 0:
+              prec = 1.
+          f1 = 2 * prec * reca / (prec + reca + 1e-8)
+          sent_f1.append(f1)
+  if not args.minimal_dataloader:
+    tp, fp, fn = corpus_f1  
+    prec = tp / (tp + fp)
+    recall = tp / (tp + fn)
+    corpus_f1 = 2*prec*recall/(prec+recall) if prec+recall > 0 else 0.
+    sent_f1 = np.mean(np.array(sent_f1))
   recon_ppl = np.exp(total_nll / num_words)
   ppl_elbo = np.exp((total_nll + total_kl)/num_words) 
   kl = total_kl /num_sents
   print('ReconPPL: %.2f, KL: %.4f, PPL (Upper Bound): %.2f' %
         (recon_ppl, kl, ppl_elbo))
-  print('Corpus F1: %.2f, Sentence F1: %.2f' %
-        (corpus_f1*100, sent_f1*100))
+  if not args.minimal_dataloader:
+    print('Corpus F1: %.2f, Sentence F1: %.2f' %
+          (corpus_f1*100, sent_f1*100))
   model.train()
-  return ppl_elbo, sent_f1*100
+  return ppl_elbo, sent_f1*100 if not args.minimal_dataloader else 0
 
 if __name__ == '__main__':
   args = parser.parse_args()
