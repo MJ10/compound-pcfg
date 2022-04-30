@@ -114,3 +114,31 @@ class CompPCFG(nn.Module):
       return -log_Z, kl, (argmax_trees, argmax_spans)
     else:
       return -log_Z, kl
+
+  def batch_marginal_with_roots(self, x, lengths, tags):
+    # x : (bs,l) the padded spans
+    # lengths : (l,) their lengths
+    # tags : (l,) the root NTs
+
+    batch_size, l = x.shape
+
+    t_emb = self.t_emb
+    nt_emb = self.nt_emb
+
+    t_emb = t_emb.unsqueeze(0).unsqueeze(1).expand(batch_size, n, self.t_states, self.state_dim)
+    nt_emb = nt_emb.unsqueeze(0).expand(batch_size, self.nt_states, self.state_dim)
+
+    root_scores = torch.nn.functional.one_hot(tags, self.nt_states).float().clamp(min=1e-32).log()
+    unary_scores = self.vocab_mlp(t_emb).log_softmax(1)
+    x_expand = x.unsqueeze(2).expand(batch_size, x.size(1), self.t_states).unsqueeze(3)
+    unary = unary_scores.gather(3, x_expand).squeeze(3)
+
+    rule_score = self.rule_mlp(nt_emb).log_softmax(2)
+    rule_scores = rule_score.view(batch_size, self.nt_states, self.all_states, self.all_states)
+    params = (unary, rule_scores, root_scores)
+    dist = SentCFG(params, lengths=lengths)
+    log_Z = dist.partition
+
+    return log_Z
+
+
