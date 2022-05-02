@@ -113,9 +113,13 @@ class GFlowNet_backward(nn.Module):
         return pos_logits
 
 class ar_segmenter_controller():
-    def __init__(self, device, args):
+    def __init__(self, device, args, n_vocab, pcfg, ar_model):
         self.device = device
         self.args = args
+        self.n_vocab = n_vocab
+        self.pcfg = pcfg
+        self.ar_model = ar_model
+        self.split_sym = n_vocab + args.t_states + args.nt_states
 
     def sample_forward(self,
                     action : str,
@@ -268,7 +272,7 @@ class ar_segmenter_controller():
         tag_seqs = []
 
         for seq in seqs:
-            nt_positions = torch.nonzero(seq >= self.args.n_vocab)
+            nt_positions = torch.nonzero(seq >= self.n_vocab)
             p = [-1] + list(nt_positions.cpu().numpy())
             spans += [ seq[p[i]+1:p[i+1]] for i in range(len(p)) ]
             tag_seqs.append(seq[nt_positions])
