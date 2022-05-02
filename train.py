@@ -209,7 +209,7 @@ def eval(data, data_lens, model):
         lengths = data_lens[i]
         batch_size = args.batch_size
         num_sents += batch_size
-        num_words += sum(lengths) # we implicitly generate </s> so we explicitly count it
+        num_words += sum(lengths)+len(lengths) # we implicitly generate </s> so we explicitly count it
       
       else:
         sents, length, batch_size, _, gold_spans, gold_binary_trees, other_data = data[i] 
