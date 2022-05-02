@@ -130,8 +130,9 @@ class segmenter_controller():
         P_F = self.calc_forward_prob(F_logits=F_logits,
                                     F_actions=F_actions,
                                     states=states)
+        B_actions = self.reverse_forward_actions(states, F_actions)
         states = self.apply_forward_actions(states, F_actions)
-        return states, F_actions, P_F
+        return states, F_actions, B_actions, P_F
     
 
     def calc_forward_prob(self,
@@ -154,7 +155,7 @@ class segmenter_controller():
                 mask = torch.zeros(state.size()).to(self.device)
                 mask[state!=self.args['split_sym']] = -100
                 # take softmax
-                logP_pos = F.log_softmax(F_logits[i, :state.size(-1), 1]+mask, dim=-1)
+                logP_pos = F.log_softmax(F_logits[i, :state.size(-1), 0]+mask, dim=-1)
                 logP_tok = F.log_softmax(F_logits[i, F_actions[1][i], 1:], dim=-1)
                 logF_prob.append(logP_pos[F_actions[1][i]]+logP_tok[F_actions[2][i]])
         return torch.stack(logF_prob, dim=0)
@@ -180,7 +181,7 @@ class segmenter_controller():
                 mask = torch.zeros(state.size()).to(self.device)
                 mask[(state>=self.args['split_sym'])] = -100
                 # take softmax over positions
-                P_pos = F.softmax(F_logits[i, :state.size(-1), 0]/temperature_pos+mask, dim=-1)
+                P_pos = F.softmax(F_logits[i, :state.size(-1)]/temperature_pos+mask, dim=-1)
                 F_pos = torch.multinomial(P_pos, 1).item()
                 positions.append(F_pos)
                 tokens.append(0)
@@ -222,7 +223,7 @@ class segmenter_controller():
                 states[i] = torch.cat([states[i][:pos], torch.zeros(1).to(self.device)+self.args['split_sym'], states[i][pos:]], dim=0)
             elif action == "tag":
                 # change the pos-th split symbol to tok
-                states[i][states[i]==self.args['split_sym']][pos] = tok # need to verify that this actually modifies states
+                states[i][pos] = tok+self.args['n_vocab'] # need to verify that this actually modifies states
         return states
 
     @torch.no_grad()
@@ -239,11 +240,11 @@ class segmenter_controller():
             elif action == "split":
                 B_actions.append('merge')
                 # return the index of the split symbol at pos
-                B_positions.append((states[i][:pos]==self.args['split_sym']).sum().item())
+                B_positions.append(pos)
             elif action == "tag":
                 B_actions.append('untag')
                 # return the index of the split symbol at pos
-                B_positions.append((states[i][:pos]==self.args['split_sym']).sum().item())
+                B_positions.append(pos)
         return (B_actions, B_positions)
 
     def sample_backward(self,
@@ -255,8 +256,9 @@ class segmenter_controller():
         P_B = self.calc_backward_prob(B_logits=B_logits,
                                     B_actions=B_actions,
                                     states=states)
+        F_actions = self.reverse_backward_actions(states, B_actions)
         states = self.apply_backward_actions(states, B_actions)
-        return states, B_actions, P_B
+        return states, B_actions, F_actions, P_B
 
     def calc_backward_prob(self,
                         B_logits: torch.Tensor,
@@ -329,7 +331,7 @@ class segmenter_controller():
                 states[i] = torch.cat([states[i][:pos], states[i][pos+1:]], dim=0)
             elif action == "untag":
                 # change the pos-th symbol to a split symbol
-                states[i][states[i]>=self.args['split_sym']][pos] = self.args['split_sym'] # need to verify that this actually modifies states
+                states[i][pos] = self.args['split_sym']
         return states
 
     @torch.no_grad()
@@ -354,7 +356,7 @@ class segmenter_controller():
                 F_actions.append('tag')
                 # return the index of the pos-th split symbol
                 F_positions.append(pos)
-                F_tokens.append(states[i][pos])
+                F_tokens.append(states[i][pos].item()-self.args['n_vocab'])
         return (F_actions, F_positions, F_tokens)
     
 
