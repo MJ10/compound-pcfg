@@ -112,7 +112,7 @@ class GFlowNet_backward(nn.Module):
         pos_logits = self.to_pos(x).squeeze(-1)
         return pos_logits
 
-class ar_segmenter_controller():
+class segmenter_controller():
     def __init__(self, device, args):
         self.device = device
         self.args = args
@@ -120,7 +120,7 @@ class ar_segmenter_controller():
     def sample_forward(self,
                     action : str,
                     F_logits: torch.Tensor,
-                    states: torch.Tensor,
+                    states: list,
                     greedy: bool = False,
                     temperature_pos : float = -1.,):
         F_actions = self._sample_forward_actions(action, F_logits, greedy, temperature_pos)
@@ -134,7 +134,7 @@ class ar_segmenter_controller():
     def calc_forward_prob(self,
                         action : str,
                         F_logits: torch.Tensor,
-                        states: torch.Tensor, 
+                        states: list,
                         F_actions: tuple = None,
                         greedy: bool = False,
                         temperature_pos: float = 1.0):
@@ -161,10 +161,10 @@ class ar_segmenter_controller():
                 continue
             elif action == "split":
                 # insert a split symbol at pos
-                states[i] = torch.cat([states[i][:pos], torch.zeros(1).to(self.device)+self.split_sym, states[i][pos:]], dim=0)
+                states[i] = torch.cat([states[i][:pos], torch.zeros(1).to(self.device)+self.args['split_sym'], states[i][pos:]], dim=0)
             elif action == "tag":
                 # change the pos-th split symbol to tok
-                states[i][states[i]==self.split_sym][pos] = tok # need to verify that this actually modifies states
+                states[i][states[i]==self.args['split_sym']][pos] = tok # need to verify that this actually modifies states
         return states
 
     @torch.no_grad()
@@ -188,12 +188,12 @@ class ar_segmenter_controller():
                 B_positions.append((states[i][:pos]==self.split_sym).sum().item())
         return (B_actions, B_positions)
 
-    def sample_backward(self, 
+    def sample_backward(self,
+                        action : str,
                         B_logits: torch.Tensor,
-                        states: torch.Tensor,
-                        greedy: bool = False,
-                        temperature_pos : float = -1.):
-        B_actions = self._sample_backward_actions(B_logits, greedy, temperature_pos)
+                        states: list,
+                        temperature_pos : float = 1.):
+        B_actions = self._sample_backward_actions(action, B_logits, states, temperature_pos)
         P_B = self.calc_backward_prob(B_logits=B_logits,
                                     B_actions=B_actions,
                                     states=states)
@@ -202,17 +202,61 @@ class ar_segmenter_controller():
 
     def calc_backward_prob(self,
                         B_logits: torch.Tensor,
-                        states: torch.Tensor,
-                        B_actions: torch.Tensor = None,
-                        greedy: bool = False,
-                        temperature_pos: float = 1.0):
-        raise NotImplementedError
+                        states: list,
+                        B_actions: tuple):
+        logB_prob = []
+        for i, state in enumerate(states):
+            # if the action is none, the associated log probability is 0
+            if B_actions[0][i] == 'none':
+                logB_prob.append(torch.tensor(0., device=self.device))
+                continue
+            elif B_actions[0][i] == "merge":
+                mask = torch.zeros(state.size()).to(self.device)
+                mask[(state<self.args['split_sym'])|(state==self.args['eos_sym'])] = -100
+            elif B_actions[0][i] == "untag":
+                mask = torch.zeros(state.size()).to(self.device)
+                mask[(state<=self.args['split_sym'])|(state==self.args['eos_sym'])] = -100
+            # take softmax
+            lpgP_pos = F.log_softmax(B_logits[i, :state.size(-1)]+mask, dim=-1)
+            logB_prob.append(lpgP_pos[B_actions[1][i]])
+        return torch.stack(logB_prob, dim=0)
 
     def _sample_backward_actions(self,
+                                action : str,
                                 B_logits: torch.Tensor,
-                                greedy: bool = False,
+                                states: list,
                                 temperature_pos : float = -1.,):
-        raise NotImplementedError
+        actions = []
+        positions = []
+        for i, state in enumerate(states):
+            if action == "merge":
+                # if s0, add none to actions
+                if state[(state>=self.args['split_sym'])&(state<self.args['eos_sym'])].sum().item() == 0:
+                    actions.append('none')
+                    positions.append(0)
+                    continue
+                # otherwise, sample a split symbol to delete by first constructing a mask
+                mask = torch.zeros(state.size()).to(self.device)
+                mask[(state<self.args['split_sym'])|(state==self.args['eos_sym'])] = -100
+                # take softmax
+                P_pos = F.softmax(B_logits[i, :state.size(-1)]/temperature_pos+mask, dim=-1)
+                B_pos = torch.multinomial(P_pos, 1).item()
+                positions.append(B_pos)
+            elif action == "untag":
+                # if s0, add none to actions
+                if state[(state>self.args['split_sym'])&(state<self.args['eos_sym'])].sum().item() == 0:
+                    actions.append('none')
+                    positions.append(0)
+                    continue
+                # otherwise, pick a tag to reverse back to a split symbol
+                mask = torch.zeros(state.size()).to(self.device)
+                mask[(state<=self.args['split_sym'])|(state==self.args['eos_sym'])] = -100
+                # take softmax
+                P_pos = F.softmax(B_logits[i, :state.size(-1)]/temperature_pos+mask, dim=-1)
+                B_pos = torch.multinomial(P_pos, 1).item()
+                positions.append(B_pos)
+            actions.append(action)
+        return (actions, positions)
 
     @torch.no_grad()
     def apply_backward_actions(self,
@@ -227,7 +271,7 @@ class ar_segmenter_controller():
                 states[i] = torch.cat([states[i][:pos], states[i][pos+1:]], dim=0)
             elif action == "untag":
                 # change the pos-th symbol to a split symbol
-                states[i][states[i]>=self.split_sym][pos] = self.split_sym # need to verify that this actually modifies states
+                states[i][states[i]>=self.args['split_sym']][pos] = self.args['split_sym'] # need to verify that this actually modifies states
         return states
 
     @torch.no_grad()
@@ -245,14 +289,14 @@ class ar_segmenter_controller():
                 F_tokens.append(0)
             elif action == "merge":
                 F_actions.append('split')
-                # return the index of the pos-th split symbol minus 1
-                F_positions.append(torch.nonzero(states[i]==self.split_sym, as_tuple=True)[0][pos]-1)
+                # return the index of the pos-th split symbol
+                F_positions.append(pos)
                 F_tokens.append(0)
             elif action == "untag":
                 F_actions.append('tag')
-                # return the index of the pos-th split symbol minus 1
-                F_positions.append(torch.nonzero(states[i]==self.split_sym, as_tuple=True)[0][pos]-1)
-                F_tokens.append(states[i][F_positions[-1]+1])
+                # return the index of the pos-th split symbol
+                F_positions.append(pos)
+                F_tokens.append(states[i][pos])
         return (F_actions, F_positions, F_tokens)
     
 
