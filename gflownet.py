@@ -113,9 +113,13 @@ class GFlowNet_backward(nn.Module):
         return pos_logits
 
 class segmenter_controller():
-    def __init__(self, device, args):
+    def __init__(self, device, args, n_vocab=None, pcfg=None, ar_model=None):
         self.device = device
         self.args = args
+        self.n_vocab = n_vocab
+        self.pcfg = pcfg
+        self.ar_model = ar_model
+        #self.split_sym = n_vocab + args.t_states + args.nt_states
 
     def sample_forward(self,
                     action : str,
@@ -181,11 +185,11 @@ class segmenter_controller():
             elif action == "split":
                 B_actions.append('merge')
                 # return the index of the split symbol at pos
-                B_positions.append((states[i][:pos]==self.split_sym).sum().item())
+                B_positions.append((states[i][:pos]==self.args['split_sym']).sum().item())
             elif action == "tag":
                 B_actions.append('untag')
                 # return the index of the split symbol at pos
-                B_positions.append((states[i][:pos]==self.split_sym).sum().item())
+                B_positions.append((states[i][:pos]==self.args['split_sym']).sum().item())
         return (B_actions, B_positions)
 
     def sample_backward(self,

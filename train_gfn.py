@@ -85,6 +85,8 @@ def main(args):
                    h_dim = args.h_dim,
                    w_dim = args.w_dim,
                    z_dim = args.z_dim)
+  ar_model = None # TODO: init LSTM
+  gfn = None # TODO: init GFN
   for name, param in model.named_parameters():    
     if param.dim() > 1:
       xavier_uniform_(param)
@@ -92,7 +94,9 @@ def main(args):
   print(model)
   model.train()
   model.cuda()
-  optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, betas = (args.beta1, args.beta2))
+  optimizer = torch.optim.Adam({'params':model.parameters(), 'lr':args.lr, 'betas':(args.beta1, args.beta2)},
+                               {'params':ar_model.parameters(), 'lr':args.lr, 'betas':(args.beta1, args.beta2)})
+  gfn_optmizer = None # TODO: init GFN optimizer
   best_val_ppl = 1e5
   best_val_f1 = 0
   epoch = 0
@@ -102,6 +106,9 @@ def main(args):
     print('Starting epoch %d' % epoch)
     train_nll = 0.
     train_kl = 0.
+    train_gfn_logR = 0.
+    train_gfn_tb = 0.
+    train_gfn_logZ = 0.
     num_sents = 0.
     num_words = 0.
     all_stats = [[0., 0., 0.]]
@@ -112,69 +119,66 @@ def main(args):
         sents = train_data[i]
         lengths = train_lens[i]
         batch_size = args.batch_size
-        sents = sents.cuda()
-        optimizer.zero_grad()
-        nll, kl, (trees, argmax_spans) = model(sents, lengths, argmax=True)
-        num_sents += batch_size
-        num_words += sum(lengths) # we implicitly generate </s> so we explicitly count it
 
       else:
         sents, length, batch_size, _, gold_spans, gold_binary_trees, _ = train_data[i]      
         
         if length > args.max_length or length == 1: #length filter based on curriculum 
           continue
-        sents = sents.cuda()
-        optimizer.zero_grad()
-        nll, kl, (trees, argmax_spans) = model(sents, [length] * batch_size, argmax=True)
-        num_sents += batch_size
-        num_words += batch_size * (length+1) # we implicitly generate </s> so we explicitly count it
 
-      # if b % args.print_every == 0:
-      # nll, kl, (trees, argmax_spans) = model(sents, lengths, argmax=True)      
-      # else:
-        # nll, kl = model(sents, argmax=False)
-      (nll+kl).mean().backward()
-      train_nll += nll.sum().item()
-      train_kl += kl.sum().item()
-      torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)      
+        lengths = [length]*batch_size
+
+      sents = sents.cuda()
+      num_sents += batch_size
+      num_words += sum(lengths)+len(lengths)
+
+      state = torch.nn.utils.rnn.pad_sequence(sents, batch_first=True, padding_value=vocab_size+args.t_states+args.nt_states)
+      # sample GFlowNet for sequence
+      logZ, logPF, logPB, state = sample_gfn(state)
+      logR = gfn.calc_log_reward(state)
+      tb_loss = (logZ + logPF - logPF - logR.detach()**2).mean()
+
+      gfn_optimizer.zero_grad()
+      tb_loss.backward()
+      gfn_optimizer.step()
+
+      optimizer.zero_grad()
+      (-logR.sum()).backward()
+      torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)    
       optimizer.step()
-      if not args.minimal_dataloader:
-        for bb in range(batch_size):
-          span_b = [(a[0], a[1]) for a in argmax_spans[bb]] #ignore labels
-          span_b_set = set(span_b[:-1])
-          update_stats(span_b_set, [set(gold_spans[bb][:-1])], all_stats)
+
+      train_gfn_tb += tb_loss.item()
+      train_gfn_logR += logR.sum().item()
+      train_gfn_logZ += logZ.sum(0.item())
+
+      # if not args.minimal_dataloader:
+      #   for bb in range(batch_size):
+      #     span_b = [(a[0], a[1]) for a in argmax_spans[bb]] #ignore labels
+      #     span_b_set = set(span_b[:-1])
+      #     update_stats(span_b_set, [set(gold_spans[bb][:-1])], all_stats)
       if b % args.print_every == 0:
-        if not args.minimal_dataloader:
-          all_f1 = get_f1(all_stats)
+        # if not args.minimal_dataloader:
+        #   all_f1 = get_f1(all_stats)
         param_norm = sum([p.norm()**2 for p in model.parameters()]).item()**0.5
         gparam_norm = sum([p.grad.norm()**2 for p in model.parameters() 
                            if p.grad is not None]).item()**0.5
-        if args.minimal_dataloader:
-          log_str = 'Epoch: %d, Batch: %d/%d, |Param|: %.6f, |GParam|: %.2f,  LR: %.4f, ' + \
-                    'ReconPPL: %.2f, KL: %.4f, PPLBound: %.2f, ValPPL: %.2f, ' + \
-                    'Throughput: %.2f examples/sec'
-          print(log_str %
-                (epoch, b, len(train_data), param_norm, gparam_norm, args.lr, 
-                np.exp(train_nll / num_words), train_kl /num_sents, 
-                np.exp((train_nll + train_kl)/num_words), best_val_ppl, 
-                num_sents / (time.time() - start_time)))
-        else:
-          log_str = 'Epoch: %d, Batch: %d/%d, |Param|: %.6f, |GParam|: %.2f,  LR: %.4f, ' + \
-                    'ReconPPL: %.2f, KL: %.4f, PPLBound: %.2f, ValPPL: %.2f, ValF1: %.2f, ' + \
-                    'CorpusF1: %.2f, Throughput: %.2f examples/sec'
-          print(log_str %
-                (epoch, b, len(train_data), param_norm, gparam_norm, args.lr, 
-                np.exp(train_nll / num_words), train_kl /num_sents, 
-                np.exp((train_nll + train_kl)/num_words), best_val_ppl, best_val_f1, 
-                all_f1[0], num_sents / (time.time() - start_time)))
-        # print an example parse
-        # tree = get_tree_from_binary_matrix(binary_matrix[0], length)
-        tree = trees[0]
-        action = get_actions(tree)
-        sent_str = [corpus.dict.idx2word[word_idx] for word_idx in list(sents[0].cpu().numpy())]
-        print("Pred Tree: %s" % get_tree(action, sent_str))
-        if not args.minimal_dataloader:
-          print("Gold Tree: %s" % get_tree(gold_binary_trees[0], sent_str))
+
+        log_str = 'Epoch: %d, Batch: %d/%d, |Param|: %.6f, |GParam|: %.2f,  LR: %.4f, ' + \
+                  'GFN TB: %.4f, logR: %.4f, logZ: %.4f' + \
+                  'Throughput: %.2f examples/sec'
+        print(log_str %
+              (epoch, b, len(train_data), param_norm, gparam_norm, args.lr, 
+              train_gfn_tb / num_sents, train_gfn_logR / num_sents, train_gfn_logZ / num_sents,
+              num_sents / (time.time() - start_time)))
+       
+        # # print an example parse
+        # # tree = get_tree_from_binary_matrix(binary_matrix[0], length)
+        # tree = trees[0]
+        # action = get_actions(tree)
+        # sent_str = [corpus.dict.idx2word[word_idx] for word_idx in list(sents[0].cpu().numpy())]
+        # print("Pred Tree: %s" % get_tree(action, sent_str))
+        # if not args.minimal_dataloader:
+        #   print("Gold Tree: %s" % get_tree(gold_binary_trees[0], sent_str))
 
     args.max_length = min(args.final_max_length, args.max_length + args.len_incr)
     print('--------------------------------')
@@ -208,60 +212,61 @@ def eval(data, data_lens, model):
         sents = data[i]
         lengths = data_lens[i]
         batch_size = args.batch_size
-        num_sents += batch_size
-        num_words += sum(lengths)+len(lengths) # we implicitly generate </s> so we explicitly count it
-      
+       
       else:
         sents, length, batch_size, _, gold_spans, gold_binary_trees, other_data = data[i] 
         if length == 1:
           continue
         lengths = [lengths] * batch_size
-        num_sents += batch_size
-        num_words += batch_size*(length +1) # we implicitly generate </s> so we explicitly count it
       
       # note that for unsuperised parsing, we should do model(sents, argmax=True, use_mean = True)
       # but we don't for eval since we want a valid upper bound on PPL for early stopping
       # see eval.py for proper MAP inference
-      sents = sents.cuda()
-      nll, kl, (argmax_trees, argmax_spans) = model(sents, lengths, argmax=True)
-      total_nll += nll.sum().item()
-      total_kl  += kl.sum().item()
-      if not args.minimal_dataloader:
-        for b in range(batch_size):
-          span_b = [(a[0], a[1]) for a in argmax_spans[b]] #ignore labels
-          span_b_set = set(span_b[:-1])        
-          gold_b_set = set(gold_spans[b][:-1])
-          tp, fp, fn = get_stats(span_b_set, gold_b_set) 
-          corpus_f1[0] += tp
-          corpus_f1[1] += fp
-          corpus_f1[2] += fn
-          # sent-level F1 is based on L83-89 from https://github.com/yikangshen/PRPN/test_phrase_grammar.py
+      num_sents += batch_size
+      num_words += sum(lengths)+len(lengths)
 
-          model_out = span_b_set
-          std_out = gold_b_set
-          overlap = model_out.intersection(std_out)
-          prec = float(len(overlap)) / (len(model_out) + 1e-8)
-          reca = float(len(overlap)) / (len(std_out) + 1e-8)
-          if len(std_out) == 0:
-            reca = 1. 
-            if len(model_out) == 0:
-              prec = 1.
-          f1 = 2 * prec * reca / (prec + reca + 1e-8)
-          sent_f1.append(f1)
-  if not args.minimal_dataloader:
-    tp, fp, fn = corpus_f1  
-    prec = tp / (tp + fp)
-    recall = tp / (tp + fn)
-    corpus_f1 = 2*prec*recall/(prec+recall) if prec+recall > 0 else 0.
-    sent_f1 = np.mean(np.array(sent_f1))
+      state = torch.nn.utils.rnn.pad_sequence(sents, batch_first=True, padding_value=vocab_size+args.t_states+args.nt_states)
+      # sample GFlowNet for sequence
+      logZ, logPF, logPB, state = sample_gfn(state)
+      logR = gfn.calc_log_reward(state)
+
+      total_nll += logR.sum().item()
+      # if not args.minimal_dataloader:
+      #   for b in range(batch_size):
+      #     span_b = [(a[0], a[1]) for a in argmax_spans[b]] #ignore labels
+      #     span_b_set = set(span_b[:-1])        
+      #     gold_b_set = set(gold_spans[b][:-1])
+      #     tp, fp, fn = get_stats(span_b_set, gold_b_set) 
+      #     corpus_f1[0] += tp
+      #     corpus_f1[1] += fp
+      #     corpus_f1[2] += fn
+      #     # sent-level F1 is based on L83-89 from https://github.com/yikangshen/PRPN/test_phrase_grammar.py
+
+      #     model_out = span_b_set
+      #     std_out = gold_b_set
+      #     overlap = model_out.intersection(std_out)
+      #     prec = float(len(overlap)) / (len(model_out) + 1e-8)
+      #     reca = float(len(overlap)) / (len(std_out) + 1e-8)
+      #     if len(std_out) == 0:
+      #       reca = 1. 
+      #       if len(model_out) == 0:
+      #         prec = 1.
+      #     f1 = 2 * prec * reca / (prec + reca + 1e-8)
+      #     sent_f1.append(f1)
+  # if not args.minimal_dataloader:
+  #   tp, fp, fn = corpus_f1  
+  #   prec = tp / (tp + fp)
+  #   recall = tp / (tp + fn)
+  #   corpus_f1 = 2*prec*recall/(prec+recall) if prec+recall > 0 else 0.
+  #   sent_f1 = np.mean(np.array(sent_f1))
   recon_ppl = np.exp(total_nll / num_words)
   ppl_elbo = np.exp((total_nll + total_kl)/num_words) 
-  kl = total_kl /num_sents
-  print('ReconPPL: %.2f, KL: %.4f, PPL (Upper Bound): %.2f' %
-        (recon_ppl, kl, ppl_elbo))
-  if not args.minimal_dataloader:
-    print('Corpus F1: %.2f, Sentence F1: %.2f' %
-          (corpus_f1*100, sent_f1*100))
+  # kl = total_kl /num_sents
+  print('ReconPPL: %.2f, PPL (Upper Bound): %.2f' %
+        (recon_ppl, ppl_elbo))
+  # if not args.minimal_dataloader:
+  #   print('Corpus F1: %.2f, Sentence F1: %.2f' %
+  #         (corpus_f1*100, sent_f1*100))
   model.train()
   return ppl_elbo, sent_f1*100 if not args.minimal_dataloader else 0
 
