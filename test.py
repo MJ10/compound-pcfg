@@ -9,11 +9,10 @@ class TestControllerMethods(unittest.TestCase):
     
     def test_sample_backward_actions_merge(self):
         controller = segmenter_controller(device='cpu', args={'pad_sym': 5,
-                                                              'split_sym': 6,
-                                                              'eos_sym': 10})
+                                                              'split_sym': 6})
         for i in range(50):
-            states = [torch.tensor([0, 6, 0, 6, 1, 10]),
-                  torch.tensor([1, 2, 6, 4, 6, 1, 6, 3, 4, 10])]
+            states = [torch.tensor([0, 6, 0, 6, 1, 2]),
+                  torch.tensor([1, 2, 6, 4, 6, 1, 6, 3, 4, 2])]
             original_states = [s.clone() for s in states]
             new_states, B_actions, P_B = \
                 controller.sample_backward('merge',

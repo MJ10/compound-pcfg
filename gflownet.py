@@ -125,31 +125,85 @@ class segmenter_controller():
                     action : str,
                     F_logits: torch.Tensor,
                     states: list,
-                    greedy: bool = False,
-                    temperature_pos : float = -1.,):
-        F_actions = self._sample_forward_actions(action, F_logits, greedy, temperature_pos)
+                    temperature_pos : float = 1.,):
+        F_actions = self._sample_forward_actions(action, F_logits, states, temperature_pos)
         P_F = self.calc_forward_prob(F_logits=F_logits,
-                                            F_actions=F_actions,
-                                            states=states)
+                                    F_actions=F_actions,
+                                    states=states)
         states = self.apply_forward_actions(states, F_actions)
         return states, F_actions, P_F
     
 
     def calc_forward_prob(self,
-                        action : str,
                         F_logits: torch.Tensor,
                         states: list,
-                        F_actions: tuple = None,
-                        greedy: bool = False,
-                        temperature_pos: float = 1.0):
-        raise NotImplementedError
+                        F_actions: tuple = None,):
+        logF_prob = []
+        for i, state in enumerate(states):
+            # if the action is none, the associated log probability is 0
+            if F_actions[0][i] == 'none':
+                logF_prob.append(torch.tensor(0., device=self.device))
+                continue
+            elif F_actions[0][i] == "split":
+                mask = torch.zeros(state.size()).to(self.device)
+                mask[state>=self.args['split_sym']] = -100
+                # take softmax
+                logP_pos = F.log_softmax(F_logits[i, :state.size(-1)]+mask, dim=-1)
+                logF_prob.append(logP_pos[F_actions[1][i]])
+            elif F_actions[0][i] == "tag":
+                mask = torch.zeros(state.size()).to(self.device)
+                mask[state!=self.args['split_sym']] = -100
+                # take softmax
+                logP_pos = F.log_softmax(F_logits[i, :state.size(-1), 1]+mask, dim=-1)
+                logP_tok = F.log_softmax(F_logits[i, F_actions[1][i], 1:], dim=-1)
+                logF_prob.append(logP_pos[F_actions[1][i]]+logP_tok[F_actions[2][i]])
+        return torch.stack(logF_prob, dim=0)
 
     def _sample_forward_actions(self,
                                 action : str,
                                 F_logits: torch.Tensor,
-                                greedy: bool = False,
-                                temperature_pos : float = 1.,):
-        raise NotImplementedError
+                                states: list,
+                                temperature_pos : float = 1.,
+                                temperature_tok : float = 1.,):
+        actions = []
+        positions = []
+        tokens = []
+        for i, state in enumerate(states):
+            if action == "split":
+                # if sf, add none to actions
+                if state[state!=self.args['pad_sym']][-1] >= self.args['split_sym']:
+                    actions.append('none')
+                    positions.append(0)
+                    tokens.append(0)
+                    continue
+                # otherwise, sample a split symbol to delete by first constructing a mask
+                mask = torch.zeros(state.size()).to(self.device)
+                mask[(state>=self.args['split_sym'])] = -100
+                # take softmax over positions
+                P_pos = F.softmax(F_logits[i, :state.size(-1), 0]/temperature_pos+mask, dim=-1)
+                F_pos = torch.multinomial(P_pos, 1).item()
+                positions.append(F_pos)
+                tokens.append(0)
+            elif action == "tag":
+                # if sf, add none to actions
+                if (state[state!=self.args['pad_sym']][-1] >= self.args['split_sym']) and (state[state==self.args['split_sym']].sum().item() == 0):
+                    actions.append('none')
+                    positions.append(0)
+                    tokens.append(0)
+                    continue
+                # otherwise, pick a tag to reverse back to a split symbol
+                mask = torch.zeros(state.size()).to(self.device)
+                mask[state!=self.args['split_sym']] = -100
+                # take softmax
+                P_pos = F.softmax(F_logits[i, :state.size(-1), 0]/temperature_pos+mask, dim=-1)
+                F_pos = torch.multinomial(P_pos, 1).item()
+                positions.append(F_pos)
+                # take softmax over tokens
+                P_tok = F.softmax(F_logits[i, F_pos, 1:]/temperature_tok, dim=-1)
+                F_tok = torch.multinomial(P_tok, 1).item()
+                tokens.append(F_tok)
+            actions.append(action)
+        return (actions, positions, tokens)
 
     @torch.no_grad()
     def apply_forward_actions(self,
@@ -216,10 +270,10 @@ class segmenter_controller():
                 continue
             elif B_actions[0][i] == "merge":
                 mask = torch.zeros(state.size()).to(self.device)
-                mask[(state<self.args['split_sym'])|(state==self.args['eos_sym'])] = -100
+                mask[state!=self.args['split_sym']] = -100
             elif B_actions[0][i] == "untag":
                 mask = torch.zeros(state.size()).to(self.device)
-                mask[(state<=self.args['split_sym'])|(state==self.args['eos_sym'])] = -100
+                mask[state<=self.args['split_sym']] = -100
             # take softmax
             lpgP_pos = F.log_softmax(B_logits[i, :state.size(-1)]+mask, dim=-1)
             logB_prob.append(lpgP_pos[B_actions[1][i]])
@@ -235,26 +289,26 @@ class segmenter_controller():
         for i, state in enumerate(states):
             if action == "merge":
                 # if s0, add none to actions
-                if state[(state>=self.args['split_sym'])&(state<self.args['eos_sym'])].sum().item() == 0:
+                if state[state>=self.args['split_sym']].sum().item() == 0:
                     actions.append('none')
                     positions.append(0)
                     continue
                 # otherwise, sample a split symbol to delete by first constructing a mask
                 mask = torch.zeros(state.size()).to(self.device)
-                mask[(state<self.args['split_sym'])|(state==self.args['eos_sym'])] = -100
+                mask[state<self.args['split_sym']] = -100
                 # take softmax
                 P_pos = F.softmax(B_logits[i, :state.size(-1)]/temperature_pos+mask, dim=-1)
                 B_pos = torch.multinomial(P_pos, 1).item()
                 positions.append(B_pos)
             elif action == "untag":
                 # if s0, add none to actions
-                if state[(state>self.args['split_sym'])&(state<self.args['eos_sym'])].sum().item() == 0:
+                if state[state>self.args['split_sym']].sum().item() == 0:
                     actions.append('none')
                     positions.append(0)
                     continue
                 # otherwise, pick a tag to reverse back to a split symbol
                 mask = torch.zeros(state.size()).to(self.device)
-                mask[(state<=self.args['split_sym'])|(state==self.args['eos_sym'])] = -100
+                mask[state<=self.args['split_sym']] = -100
                 # take softmax
                 P_pos = F.softmax(B_logits[i, :state.size(-1)]/temperature_pos+mask, dim=-1)
                 B_pos = torch.multinomial(P_pos, 1).item()
