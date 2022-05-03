@@ -15,8 +15,9 @@ import time
 import logging
 from data import Dataset, MinimalDataset
 from utils import *
-from models import CompPCFG
+from models import CompPCFG, ARModel
 from torch.nn.init import xavier_uniform_
+from gflownet import segmenter_controller
 
 parser = argparse.ArgumentParser()
 
@@ -85,8 +86,11 @@ def main(args):
                    h_dim = args.h_dim,
                    w_dim = args.w_dim,
                    z_dim = args.z_dim)
-  ar_model = None # TODO: init LSTM
+  ar_model = ARModel(V = args.t_states + args.nt_states + 2,
+                     num_layers = 2,
+                     hidden_dim = 128)
   gfn = None # TODO: init GFN
+  controller = segmenter_controller(args.gpu, args, vocab_size, model, ar_model
   for name, param in model.named_parameters():    
     if param.dim() > 1:
       xavier_uniform_(param)
@@ -94,9 +98,12 @@ def main(args):
   print(model)
   model.train()
   model.cuda()
+  ar_model.train()
+  ar_model.cuda()
   optimizer = torch.optim.Adam({'params':model.parameters(), 'lr':args.lr, 'betas':(args.beta1, args.beta2)},
                                {'params':ar_model.parameters(), 'lr':args.lr, 'betas':(args.beta1, args.beta2)})
   gfn_optmizer = None # TODO: init GFN optimizer
+
   best_val_ppl = 1e5
   best_val_f1 = 0
   epoch = 0
@@ -135,11 +142,11 @@ def main(args):
       state = torch.nn.utils.rnn.pad_sequence(sents, batch_first=True, padding_value=vocab_size+args.t_states+args.nt_states)
       # sample GFlowNet for sequence
       logZ, logPF, logPB, state = sample_gfn(state)
-      logR = gfn.calc_log_reward(state)
+      logR = controller.calc_log_reward(state)
       tb_loss = (logZ + logPF - logPF - logR.detach()**2).mean()
 
       gfn_optimizer.zero_grad()
-      tb_loss.backward()
+      tb_loss.backward(retain_graph=True)
       gfn_optimizer.step()
 
       optimizer.zero_grad()
@@ -200,6 +207,7 @@ def main(args):
 
 def eval(data, data_lens, model):
   model.eval()
+  ar_model.eval()
   num_sents = 0
   num_words = 0
   total_nll = 0.
@@ -268,6 +276,7 @@ def eval(data, data_lens, model):
   #   print('Corpus F1: %.2f, Sentence F1: %.2f' %
   #         (corpus_f1*100, sent_f1*100))
   model.train()
+  ar_model.train()
   return ppl_elbo, sent_f1*100 if not args.minimal_dataloader else 0
 
 if __name__ == '__main__':
