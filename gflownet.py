@@ -372,17 +372,22 @@ class segmenter_controller():
         tag_seqs = []
 
         for seq in seqs:
-            nt_positions = torch.nonzero(seq >= self.n_vocab)
+            nt_positions = torch.nonzero(seq == self.args['split_sym'])
             p = [-1] + list(nt_positions.cpu().numpy())
             spans += [ seq[p[i]+1:p[i+1]] for i in range(len(p)) ]
-            tag_seqs.append(seq[nt_positions])
+            tag_seqs.append(seq[nt_positions] - self.args['n_vocab'])
 
         x = torch.nn.utils.rnn.pad_sequence(spans, batch_first=True)
         lengths = torch.Tensor(list(map(len, spans))).to(x.device)
         tree_lls = self.pcfg.batch_marginal_with_roots(self, x, lengths, torch.cat(tag_seqs, 0))
 
-        x_tag = torch.nn.utils.rnn.pad_sequence(tag_seqs)
-        ar_lls = None # score x_tag using the AR model
+        pad_value = self.args['nt_states']+self.args['t_states']+1
+        x_tag = torch.nn.utils.rnn.pad_sequence(tag_seqs, padding_value=pad_value)
+        start_end = T.full_like(x_tag[:,:1], self.args['nt_states']+self.args['t_states'])
+        x_tag = T.cat([ start_end, x_tag, start_end ], 1)
+        outs = ar_model(x_tag.transpose(0,1)).log_softmax(-1).transpose(0,1)
+        token_lls = outs[:,:-1].gather(3, x_tag[:,1:].unsqueeze(2)).squeeze(2)
+        ar_lls = (token_lls * (x_tag[:,1:]!=pad_value).float()).sum(1)
 
         lr = torch.zeros((len(seqs),), device=x.device)
         start = 0

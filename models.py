@@ -141,4 +141,15 @@ class CompPCFG(nn.Module):
 
     return log_Z
 
+class ARModel(nn.Module):
+  def __init__(self, V, num_layers, hidden_dim):
+    super(ARModel, self).__init__()
 
+    self.embedding = nn.Embedding(V, hidden_dim)
+    self.lstm = nn.LSTM(input_size=hidden_dim, hidden_size=hidden_dim, num_layers=num_layers)
+    self.unembedding = nn.Linear(hidden_dim, V)
+
+  def forward(self,x):
+    x = self.embedding(x)
+    x, _ = self.lstm(x)
+    return self.unembedding(x)
