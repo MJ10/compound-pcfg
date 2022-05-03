@@ -24,6 +24,7 @@ class TestControllerMethods(unittest.TestCase):
             self.assertTrue(len(new_states)==len(B_actions[0]))
             self.assertTrue(len(new_states)==len(B_actions[1]))
             self.assertTrue(len(new_states)==P_B.size(0))
+            self.assertTrue((P_B<=0).all())
             self.assertTrue(all([(x==y).all() for x, y in zip(recovered_states, original_states)]))
 
     def test_sample_backward_actions_untag(self):
@@ -44,6 +45,7 @@ class TestControllerMethods(unittest.TestCase):
             self.assertTrue(len(new_states)==len(B_actions[0]))
             self.assertTrue(len(new_states)==len(B_actions[1]))
             self.assertTrue(len(new_states)==P_B.size(0))
+            self.assertTrue((P_B<=0).all())
             self.assertTrue(all([(x==y).all() for x, y in zip(recovered_states, original_states)]))
     
     def test_sample_forward_actions_split(self):
@@ -63,6 +65,7 @@ class TestControllerMethods(unittest.TestCase):
             self.assertTrue(len(new_states)==len(B_actions[0]))
             self.assertTrue(len(new_states)==len(B_actions[1]))
             self.assertTrue(len(new_states)==P_F.size(0))
+            self.assertTrue((P_F<=0).all())
             self.assertTrue(all([(x==y).all() for x, y in zip(recovered_states, original_states)]))
 
     def test_sample_forward_actions_tag(self):
@@ -83,6 +86,7 @@ class TestControllerMethods(unittest.TestCase):
             self.assertTrue(len(new_states)==len(B_actions[0]))
             self.assertTrue(len(new_states)==len(B_actions[1]))
             self.assertTrue(len(new_states)==P_F.size(0))
+            self.assertTrue((P_F<=0).all())
             self.assertTrue(all([(x==y).all() for x, y in zip(recovered_states, original_states)]))
 
 if __name__ == "__main__":

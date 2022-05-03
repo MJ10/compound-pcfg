@@ -17,7 +17,7 @@ from data import Dataset, MinimalDataset
 from utils import *
 from models import CompPCFG, ARModel
 from torch.nn.init import xavier_uniform_
-from gflownet import segmenter_controller
+from gflownet import *
 
 parser = argparse.ArgumentParser()
 
@@ -89,7 +89,12 @@ def main(args):
   ar_model = ARModel(V = args.t_states + args.nt_states + 2,
                      num_layers = 2,
                      hidden_dim = 128)
-  gfn = None # TODO: init GFN
+  gfn_Z = GFlowNet_Z(args.state_dim)
+  gfn_emb = GFlowNet_shared_embedding(vocab_size, args.state_dim, 60, args.nt_states)
+  gfn_encoder = GFlowNet_encoder(args.state_dim, 4, 4*args.state_dim, 0.1, True, 4, shared_embedding=gfn_emb)
+  gfn_forward_split = GFlowNet_forward_split(args.state_dim)
+  gfn_forward_tag = GFlowNet_forward_tag(args.nt_states, args.state_dim)
+  gfn_backward = GFlowNet_backward(args.state_dim)
   controller = segmenter_controller(args.gpu, args, vocab_size, model, ar_model)
   for name, param in model.named_parameters():    
     if param.dim() > 1:
@@ -102,7 +107,21 @@ def main(args):
   ar_model.cuda()
   optimizer = torch.optim.Adam({'params':model.parameters(), 'lr':args.lr, 'betas':(args.beta1, args.beta2)},
                                {'params':ar_model.parameters(), 'lr':args.lr, 'betas':(args.beta1, args.beta2)})
-  gfn_optmizer = None # TODO: init GFN optimizer
+  gfn_Z.train()
+  gfn_Z.cuda()
+  gfn_encoder.train()
+  gfn_encoder.cuda()
+  gfn_forward_split.train()
+  gfn_forward_split.cuda()
+  gfn_forward_tag.train()
+  gfn_forward_tag.cuda()
+  gfn_backward.train()
+  gfn_backward.cuda()
+  gfn_optimizer = torch.optim.Adam({'params':gfn_Z.parameters(), 'lr':args.lr, 'betas':(args.beta1, args.beta2)},
+                                  {'params':gfn_encoder.parameters(), 'lr':args.lr, 'betas':(args.beta1, args.beta2)},
+                                  {'params':gfn_forward_split.parameters(), 'lr':args.lr, 'betas':(args.beta1, args.beta2)},
+                                  {'params':gfn_forward_tag.parameters(), 'lr':args.lr, 'betas':(args.beta1, args.beta2)},
+                                  {'params':gfn_backward.parameters(), 'lr':args.lr, 'betas':(args.beta1, args.beta2)})
 
   best_val_ppl = 1e5
   best_val_f1 = 0
@@ -139,11 +158,11 @@ def main(args):
       num_sents += batch_size
       num_words += sum(lengths)+len(lengths)
 
-      state = torch.nn.utils.rnn.pad_sequence(sents, batch_first=True, padding_value=vocab_size+args.t_states+args.nt_states)
       # sample GFlowNet for sequence
-      logZ, logPF, logPB, state = sample_gfn(state)
+      logZ, logPF, logPB, sents = sample_gfn(sents)
+      state = torch.nn.utils.rnn.pad_sequence(sents, batch_first=True, padding_value=vocab_size+args.t_states+args.nt_states)
       logR = controller.calc_log_reward(state)
-      tb_loss = (logZ + logPF - logPF - logR.detach()**2).mean()
+      tb_loss = (logZ + logPF - logPB - logR.detach()**2).mean()
 
       gfn_optimizer.zero_grad()
       tb_loss.backward(retain_graph=True)
@@ -279,9 +298,51 @@ def eval(data, data_lens, model):
   ar_model.train()
   return ppl_elbo, sent_f1*100 if not args.minimal_dataloader else 0
 
-def sample_gfn(state):
-  # TODO
-  return logZ, logPF, logPB, state
+def sample_gfn(sents, controller, gfn_Z, gfn_encoder, gfn_forward_split, gfn_forward_tag, gfn_backward):
+  def done_splitting(sent):
+    if sent[-1] == args.vocab_size:
+      return True
+    return False
+  def done_tagging(sent):
+    if sent[sent==args.vocab_size].sum() == 0:
+      return True
+    return False
+  logPF = torch.zeros(sents.shape[0], device=args.device)
+  logPB = torch.zeros(sents.shape[0], device=args.device)
+  # Phase I:
+  #  - get logZ
+  logZ = gfn_Z(sents)
+  # Phase II:
+  #  - split the seqs until the last token is a split symbol
+  encoded_sents = gfn_encoder(sents)
+  while not all([done_splitting(sent) for sent in sents]):
+    _, _, B_actions, _logPF = \
+                controller.sample_forward('split',
+                                          gfn_forward_split(encoded_sents),
+                                          sents)
+    encoded_sents = gfn_encoder(sents)
+    _logPB = controller.calc_backward_prob(gfn_backward(encoded_sents),
+                                          new_sents,
+                                          B_actions)
+    encoded_sents = gfn_encoder(sents)
+    logPF += _logPF
+    logPB += _logPB
+  # Phase III:
+  #  - tag all the split symbols until there are none left
+  encoded_sents = gfn_encoder(sents)
+  while not all([done_tagging(sent) for sent in sents]):
+    new_sents, _, B_actions, _logPF = \
+                controller.sample_forward('tag',
+                                          gfn_forward_tag(encoded_sents),
+                                          sents)
+    encoded_sents = gfn_encoder(sents)
+    _logPB = controller.calc_backward_prob(gfn_backward(encoded_sents),
+                                          new_sents,
+                                          B_actions)
+    encoded_sents = gfn_encoder(sents)
+    logPF += _logPF
+    logPB += _logPB
+  return logZ, logPF, logPB, sents
 
 if __name__ == '__main__':
   args = parser.parse_args()

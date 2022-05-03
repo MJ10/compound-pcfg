@@ -49,14 +49,10 @@ class GFlowNet_shared_embedding(nn.Module):
         return encoded_tgt, tgt_key_padding_mask
 
 class GFlowNet_encoder(nn.Module):
-    def __init__(self, n_vocab, d_model, nhead, dim_feedforward, dropout, norm_first, nlayers, n_nts=0,
-                 seqlen=128, batch_first=True, activation="relu", shared_embedding=None):
+    def __init__(self, d_model, nhead, dim_feedforward, dropout, norm_first, nlayers, batch_first=True, activation="relu", shared_embedding=None):
         nn.Module.__init__(self)
         self.d_model = d_model
-        if shared_embedding is None:
-            self.embedding = GFlowNet_shared_embedding(n_vocab, d_model, seqlen, n_nts=n_nts)
-        else:
-            self.embedding = shared_embedding
+        self.embedding = shared_embedding
         encoder_layer = TransformerEncoderLayer(d_model=d_model, nhead=nhead, dim_feedforward=dim_feedforward, dropout=dropout,
                                                 batch_first=batch_first, activation=activation, norm_first=norm_first)
         encoder_norm = LayerNorm(d_model, eps=1e-5)
@@ -178,8 +174,18 @@ class segmenter_controller():
                     tokens.append(0)
                     continue
                 # otherwise, sample a split symbol to delete by first constructing a mask
+                # There are three rules for masking
+                # 1. mask every split symbol
+                # 2. mask the two tokens before and the one tokens after every split symbol
+                # 3. the last token is always unmasked
                 mask = torch.zeros(state.size()).to(self.device)
                 mask[(state>=self.args['split_sym'])] = -100
+                left_one_mask = torch.cat([state[1:], torch.zeros(1).to(self.device)-100], dim=0)
+                left_two_mask = torch.cat([state[2:], torch.zeros(2).to(self.device)-100], dim=0)
+                right_one_mask = torch.cat([torch.zeros(1).to(self.device)-100, state[:-1]], dim=0)
+                mask += left_one_mask + left_two_mask + right_one_mask
+                mask[-1] = 0
+                mask[mask!=0] = -100
                 # take softmax over positions
                 P_pos = F.softmax(F_logits[i, :state.size(-1)]/temperature_pos+mask, dim=-1)
                 F_pos = torch.multinomial(P_pos, 1).item()
