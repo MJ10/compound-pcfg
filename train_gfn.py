@@ -279,6 +279,10 @@ def eval(data, data_lens, model):
   ar_model.train()
   return ppl_elbo, sent_f1*100 if not args.minimal_dataloader else 0
 
+def sample_gfn(state):
+  # TODO
+  return logZ, logPF, logPB, state
+
 if __name__ == '__main__':
   args = parser.parse_args()
   main(args)
