@@ -90,7 +90,7 @@ def main(args):
                      num_layers = 2,
                      hidden_dim = 128)
   gfn = None # TODO: init GFN
-  controller = segmenter_controller(args.gpu, args, vocab_size, model, ar_model
+  controller = segmenter_controller(args.gpu, args, vocab_size, model, ar_model)
   for name, param in model.named_parameters():    
     if param.dim() > 1:
       xavier_uniform_(param)
@@ -156,7 +156,7 @@ def main(args):
 
       train_gfn_tb += tb_loss.item()
       train_gfn_logR += logR.sum().item()
-      train_gfn_logZ += logZ.sum(0.item())
+      train_gfn_logZ += logZ.sum(0).item()
 
       # if not args.minimal_dataloader:
       #   for bb in range(batch_size):
