@@ -298,51 +298,62 @@ def eval(data, data_lens, model):
   ar_model.train()
   return ppl_elbo, sent_f1*100 if not args.minimal_dataloader else 0
 
-def sample_gfn(sents, controller, gfn_Z, gfn_encoder, gfn_forward_split, gfn_forward_tag, gfn_backward):
-  def done_splitting(sent):
-    if sent[-1] == args.vocab_size:
-      return True
-    return False
-  def done_tagging(sent):
-    if sent[sent==args.vocab_size].sum() == 0:
-      return True
-    return False
-  logPF = torch.zeros(sents.shape[0], device=args.device)
-  logPB = torch.zeros(sents.shape[0], device=args.device)
+def sample_gfn(state, controller, gfn_Z, gfn_encoder, gfn_forward_split, gfn_forward_tag, gfn_backward):
+  def done_splitting(state):
+    result = []
+    for padded_sent in state:
+      if padded_sent[padded_sent!=args.vocab_size+args.nt_states][-1] == args.vocab_size:
+        result.append(True)
+      else:
+        result.append(False)
+    return result
+  
+  def done_tagging(state):
+    result = []
+    for padded_sent in state:
+      if padded_sent[padded_sent==args.vocab_size].sum() == 0:
+        result.append(True)
+      else:
+        result.append(False)
+    return result
+  
+
+  logPF = torch.zeros(state.shape[0], device=args.device)
+  logPB = torch.zeros(state.shape[0], device=args.device)
   # Phase I:
   #  - get logZ
-  logZ = gfn_Z(sents)
+  logZ = gfn_Z(state)
   # Phase II:
   #  - split the seqs until the last token is a split symbol
-  encoded_sents = gfn_encoder(sents)
-  while not all([done_splitting(sent) for sent in sents]):
+  encoded_sents = gfn_encoder(state)
+  while all(done_splitting(state)):
     _, _, B_actions, _logPF = \
                 controller.sample_forward('split',
                                           gfn_forward_split(encoded_sents),
-                                          sents)
-    encoded_sents = gfn_encoder(sents)
+                                          state)
+    encoded_sents = gfn_encoder(state)
     _logPB = controller.calc_backward_prob(gfn_backward(encoded_sents),
                                           new_sents,
                                           B_actions)
-    encoded_sents = gfn_encoder(sents)
+    encoded_sents = gfn_encoder(state)
     logPF += _logPF
     logPB += _logPB
   # Phase III:
   #  - tag all the split symbols until there are none left
-  encoded_sents = gfn_encoder(sents)
-  while not all([done_tagging(sent) for sent in sents]):
+  encoded_sents = gfn_encoder(state)
+  while all(done_tagging(state)):
     new_sents, _, B_actions, _logPF = \
                 controller.sample_forward('tag',
                                           gfn_forward_tag(encoded_sents),
-                                          sents)
-    encoded_sents = gfn_encoder(sents)
+                                          state)
+    encoded_sents = gfn_encoder(state)
     _logPB = controller.calc_backward_prob(gfn_backward(encoded_sents),
                                           new_sents,
                                           B_actions)
-    encoded_sents = gfn_encoder(sents)
+    encoded_sents = gfn_encoder(state)
     logPF += _logPF
     logPB += _logPB
-  return logZ, logPF, logPB, sents
+  return logZ, logPF, logPB, state
 
 if __name__ == '__main__':
   args = parser.parse_args()
