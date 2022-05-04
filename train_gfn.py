@@ -86,7 +86,7 @@ def main(args):
                    h_dim = args.h_dim,
                    w_dim = args.w_dim,
                    z_dim = args.z_dim)
-  ar_model = ARModel(V = args.t_states + args.nt_states + 2,
+  ar_model = ARModel(V = args.nt_states + 2,
                      num_layers = 2,
                      hidden_dim = 128)
   gfn_Z = GFlowNet_Z(args.state_dim)
@@ -95,7 +95,7 @@ def main(args):
   gfn_forward_split = GFlowNet_forward_split(args.state_dim)
   gfn_forward_tag = GFlowNet_forward_tag(args.nt_states, args.state_dim)
   gfn_backward = GFlowNet_backward(args.state_dim)
-  controller = segmenter_controller(args.gpu, args, vocab_size, model, ar_model)
+  controller = segmenter_controller(device, args, vocab_size, model, ar_model)
   for name, param in model.named_parameters():    
     if param.dim() > 1:
       xavier_uniform_(param)
@@ -105,8 +105,8 @@ def main(args):
   model.cuda()
   ar_model.train()
   ar_model.cuda()
-  optimizer = torch.optim.Adam({'params':model.parameters(), 'lr':args.lr, 'betas':(args.beta1, args.beta2)},
-                               {'params':ar_model.parameters(), 'lr':args.lr, 'betas':(args.beta1, args.beta2)})
+  optimizer = torch.optim.Adam([{'params':model.parameters(), 'lr':args.lr, 'betas':(args.beta1, args.beta2)},
+                                {'params':ar_model.parameters(), 'lr':args.lr, 'betas':(args.beta1, args.beta2)}])
   gfn_Z.train()
   gfn_Z.cuda()
   gfn_encoder.train()
@@ -117,11 +117,11 @@ def main(args):
   gfn_forward_tag.cuda()
   gfn_backward.train()
   gfn_backward.cuda()
-  gfn_optimizer = torch.optim.Adam({'params':gfn_Z.parameters(), 'lr':args.lr, 'betas':(args.beta1, args.beta2)},
-                                  {'params':gfn_encoder.parameters(), 'lr':args.lr, 'betas':(args.beta1, args.beta2)},
-                                  {'params':gfn_forward_split.parameters(), 'lr':args.lr, 'betas':(args.beta1, args.beta2)},
-                                  {'params':gfn_forward_tag.parameters(), 'lr':args.lr, 'betas':(args.beta1, args.beta2)},
-                                  {'params':gfn_backward.parameters(), 'lr':args.lr, 'betas':(args.beta1, args.beta2)})
+  gfn_optimizer = torch.optim.Adam([{'params':gfn_Z.parameters(), 'lr':args.lr, 'betas':(args.beta1, args.beta2)},
+                                    {'params':gfn_encoder.parameters(), 'lr':args.lr, 'betas':(args.beta1, args.beta2)},
+                                    {'params':gfn_forward_split.parameters(), 'lr':args.lr, 'betas':(args.beta1, args.beta2)},
+                                    {'params':gfn_forward_tag.parameters(), 'lr':args.lr, 'betas':(args.beta1, args.beta2)},
+                                    {'params':gfn_backward.parameters(), 'lr':args.lr, 'betas':(args.beta1, args.beta2)}])
 
   best_val_ppl = 1e5
   best_val_f1 = 0
@@ -159,7 +159,7 @@ def main(args):
       num_words += sum(lengths)+len(lengths)
 
       # sample GFlowNet for sequence
-      logZ, logPF, logPB, sents = sample_gfn(sents)
+      logZ, logPF, logPB, sents = sample_gfn(sents, controller, gfn_Z, gfn_encoder, gfn_forward_split, gfn_forward_tag, gfn_backward)
       state = torch.nn.utils.rnn.pad_sequence(sents, batch_first=True, padding_value=vocab_size+args.t_states+args.nt_states)
       logR = controller.calc_log_reward(state)
       tb_loss = (logZ + logPF - logPB - logR.detach()**2).mean()
@@ -318,8 +318,8 @@ def sample_gfn(state, controller, gfn_Z, gfn_encoder, gfn_forward_split, gfn_for
     return result
   
 
-  logPF = torch.zeros(state.shape[0], device=args.device)
-  logPB = torch.zeros(state.shape[0], device=args.device)
+  logPF = torch.zeros(state.shape[0], device=device)
+  logPB = torch.zeros(state.shape[0], device=device)
   # Phase I:
   #  - get logZ
   logZ = gfn_Z(state)
@@ -357,4 +357,5 @@ def sample_gfn(state, controller, gfn_Z, gfn_encoder, gfn_forward_split, gfn_for
 
 if __name__ == '__main__':
   args = parser.parse_args()
+  device = torch.device(f'cuda:{args.gpu}')
   main(args)
