@@ -159,8 +159,8 @@ def main(args):
       num_words += sum(lengths)+len(lengths)
 
       # sample GFlowNet for sequence
-      logZ, logPF, logPB, sents = sample_gfn(sents, controller, gfn_Z, gfn_encoder, gfn_forward_split, gfn_forward_tag, gfn_backward)
       state = torch.nn.utils.rnn.pad_sequence(sents, batch_first=True, padding_value=vocab_size+args.t_states+args.nt_states)
+      logZ, logPF, logPB, sents = sample_gfn(state, controller, gfn_Z, gfn_encoder, gfn_forward_split, gfn_forward_tag, gfn_backward)
       logR = controller.calc_log_reward(state)
       tb_loss = (logZ + logPF - logPB - logR.detach()**2).mean()
 
@@ -209,7 +209,7 @@ def main(args):
     args.max_length = min(args.final_max_length, args.max_length + args.len_incr)
     print('--------------------------------')
     print('Checking validation perf...')    
-    val_ppl, val_f1 = eval(val_data, val_lens, model)
+    val_ppl, val_f1 = eval(val_data, val_lens, model, ar_model, controller, gfn_Z, gfn_encoder, gfn_forward_split, gfn_forward_tag, gfn_backward)
     print('--------------------------------')
     if val_ppl < best_val_ppl:
       best_val_ppl = val_ppl
@@ -224,7 +224,8 @@ def main(args):
       torch.save(checkpoint, args.save_path)
       model.cuda()
 
-def eval(data, data_lens, model):
+def eval(data, data_lens, model, ar_model,
+         controller, gfn_Z, gfn_encoder, gfn_forward_split, gfn_forward_tag, gfn_backward):
   model.eval()
   ar_model.eval()
   num_sents = 0
@@ -252,10 +253,10 @@ def eval(data, data_lens, model):
       num_sents += batch_size
       num_words += sum(lengths)+len(lengths)
 
-      state = torch.nn.utils.rnn.pad_sequence(sents, batch_first=True, padding_value=vocab_size+args.t_states+args.nt_states)
+      state = torch.nn.utils.rnn.pad_sequence(sents, batch_first=True, padding_value=args.vocab_size+args.t_states+args.nt_states)
       # sample GFlowNet for sequence
-      logZ, logPF, logPB, state = sample_gfn(state)
-      logR = gfn.calc_log_reward(state)
+      logZ, logPF, logPB, state = sample_gfn(state, controller, gfn_Z, gfn_encoder, gfn_forward_split, gfn_forward_tag, gfn_backward)
+      logR = controller.calc_log_reward(state)
 
       total_nll += logR.sum().item()
       # if not args.minimal_dataloader:
