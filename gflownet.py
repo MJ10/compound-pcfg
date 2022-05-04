@@ -120,8 +120,11 @@ class segmenter_controller():
     def sample_forward(self,
                     action : str,
                     F_logits: torch.Tensor,
-                    states: list,
+                    states: torch.Tensor,
                     temperature_pos : float = 1.,):
+        if type(states) is not list:
+            # convert states to a list and remove padding
+            states = [sent[sent!=self.n_vocab+self.args['n_nts']] for sent in states]
         F_actions = self._sample_forward_actions(action, F_logits, states, temperature_pos)
         P_F = self.calc_forward_prob(F_logits=F_logits,
                                     F_actions=F_actions,
@@ -135,6 +138,9 @@ class segmenter_controller():
                         F_logits: torch.Tensor,
                         states: list,
                         F_actions: tuple = None,):
+        if type(states) is not list:
+            # convert states to a list and remove padding
+            states = [sent[sent!=self.n_vocab+self.args['n_nts']] for sent in states]
         logF_prob = []
         for i, state in enumerate(states):
             # if the action is none, the associated log probability is 0
@@ -256,8 +262,11 @@ class segmenter_controller():
     def sample_backward(self,
                         action : str,
                         B_logits: torch.Tensor,
-                        states: list,
+                        states: torch.Tensor,
                         temperature_pos : float = 1.):
+        if type(states) is not list:
+            # convert states to a list and remove padding
+            states = [sent[sent!=self.n_vocab+self.args['n_nts']] for sent in states]
         B_actions = self._sample_backward_actions(action, B_logits, states, temperature_pos)
         P_B = self.calc_backward_prob(B_logits=B_logits,
                                     B_actions=B_actions,
@@ -270,6 +279,9 @@ class segmenter_controller():
                         B_logits: torch.Tensor,
                         states: list,
                         B_actions: tuple):
+        if type(states) is not list:
+            # convert states to a list and remove padding
+            states = [sent[sent!=self.n_vocab+self.args['n_nts']] for sent in states]
         logB_prob = []
         for i, state in enumerate(states):
             # if the action is none, the associated log probability is 0
