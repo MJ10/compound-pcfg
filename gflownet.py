@@ -387,9 +387,9 @@ class segmenter_controller():
         lengths = torch.Tensor(list(map(len, spans))).to(x.device)
         tree_lls = self.pcfg.batch_marginal_with_roots(self, x, lengths, torch.cat(tag_seqs, 0))
 
-        pad_value = self.args['nt_states']+self.args['t_states']+1
+        pad_value = self.args['nt_states']+1
         x_tag = torch.nn.utils.rnn.pad_sequence(tag_seqs, padding_value=pad_value)
-        start_end = T.full_like(x_tag[:,:1], self.args['nt_states']+self.args['t_states'])
+        start_end = T.full_like(x_tag[:,:1], self.args['split_sym'])
         x_tag = T.cat([ start_end, x_tag, start_end ], 1)
         outs = ar_model(x_tag.transpose(0,1)).log_softmax(-1).transpose(0,1)
         token_lls = outs[:,:-1].gather(3, x_tag[:,1:].unsqueeze(2)).squeeze(2)
