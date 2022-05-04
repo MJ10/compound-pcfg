@@ -44,9 +44,7 @@ class GFlowNet_shared_embedding(nn.Module):
         encoded_tgt = self.embedding_tgt(x)
         pos_ids = create_position_ids(x)
         encoded_tgt += self.embedding_pos(pos_ids)
-        tgt_key_padding_mask = encoded_tgt.new_zeros(x.shape)
-        tgt_key_padding_mask[x==0] = -float('inf')
-        return encoded_tgt, tgt_key_padding_mask
+        return encoded_tgt
 
 class GFlowNet_encoder(nn.Module):
     def __init__(self, d_model, nhead, dim_feedforward, dropout, norm_first, nlayers, batch_first=True, activation="relu", shared_embedding=None):
@@ -58,10 +56,10 @@ class GFlowNet_encoder(nn.Module):
         encoder_norm = LayerNorm(d_model, eps=1e-5)
         self.model_encoder = TransformerEncoder(encoder_layer, nlayers, encoder_norm)
 
-    def forward(self, x):
-        encoded_src, src_key_padding_mask = self.embedding(x)
-        memory = self.model_encoder(encoded_src, src_key_padding_mask=src_key_padding_mask)
-        return memory, src_key_padding_mask
+    def forward(self, x, pad_mask):
+        encoded_src = self.embedding(x)
+        memory = self.model_encoder(encoded_src, src_key_padding_mask=pad_mask)
+        return memory
 
 class GFlowNet_forward_split(nn.Module):
     '''

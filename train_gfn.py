@@ -317,12 +317,14 @@ def sample_gfn(state, controller, gfn_Z, gfn_encoder, gfn_forward_split, gfn_for
         result.append(False)
     return result
   
+  pad_mask = torch.zero_like(state)
+  pad_mask[state==args.vocab_size+args.nt_states] = -float('inf')
 
   logPF = torch.zeros(state.shape[0], device=device)
   logPB = torch.zeros(state.shape[0], device=device)
   # Phase I:
   #  - get logZ
-  logZ = gfn_Z(state)
+  logZ = gfn_Z(state, pad_mask)
   # Phase II:
   #  - split the seqs until the last token is a split symbol
   encoded_sents = gfn_encoder(state)
@@ -331,26 +333,26 @@ def sample_gfn(state, controller, gfn_Z, gfn_encoder, gfn_forward_split, gfn_for
                 controller.sample_forward('split',
                                           gfn_forward_split(encoded_sents),
                                           state)
-    encoded_sents = gfn_encoder(state)
+    encoded_sents = gfn_encoder(state, pad_mask)
     _logPB = controller.calc_backward_prob(gfn_backward(encoded_sents),
                                           new_sents,
                                           B_actions)
-    encoded_sents = gfn_encoder(state)
+    encoded_sents = gfn_encoder(state, pad_mask)
     logPF += _logPF
     logPB += _logPB
   # Phase III:
   #  - tag all the split symbols until there are none left
-  encoded_sents = gfn_encoder(state)
+  encoded_sents = gfn_encoder(state, pad_mask)
   while all(done_tagging(state)):
     new_sents, _, B_actions, _logPF = \
                 controller.sample_forward('tag',
                                           gfn_forward_tag(encoded_sents),
                                           state)
-    encoded_sents = gfn_encoder(state)
+    encoded_sents = gfn_encoder(state, pad_mask)
     _logPB = controller.calc_backward_prob(gfn_backward(encoded_sents),
                                           new_sents,
                                           B_actions)
-    encoded_sents = gfn_encoder(state)
+    encoded_sents = gfn_encoder(state, pad_mask)
     logPF += _logPF
     logPB += _logPB
   return logZ, logPF, logPB, state
