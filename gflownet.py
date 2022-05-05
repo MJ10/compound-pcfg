@@ -127,13 +127,17 @@ class segmenter_controller():
         if type(states) is not list:
             # convert states to a list and remove padding
             states = [sent[sent!=self.pad_sym] for sent in states]
+            convert_to_tensor = True
+        else:
+            convert_to_tensor = False
         F_actions = self._sample_forward_actions(action, F_logits, states, temperature_pos)
         P_F = self.calc_forward_prob(F_logits=F_logits,
                                     F_actions=F_actions,
                                     states=states)
         B_actions = self.reverse_forward_actions(states, F_actions)
         states = self.apply_forward_actions(states, F_actions)
-        states = torch.nn.utils.rnn.pad_sequence(states, batch_first=True, padding_value=self.pad_sym).long()
+        if convert_to_tensor:
+            states = torch.nn.utils.rnn.pad_sequence(states, batch_first=True, padding_value=self.pad_sym).long()
         return states, F_actions, B_actions, P_F
     
 
@@ -282,12 +286,17 @@ class segmenter_controller():
         if type(states) is not list:
             # convert states to a list and remove padding
             states = [sent[sent!=self.pad_sym] for sent in states]
+            convert_to_tensor = True
+        else:
+            convert_to_tensor = False
         B_actions = self._sample_backward_actions(action, B_logits, states, temperature_pos)
         P_B = self.calc_backward_prob(B_logits=B_logits,
                                     B_actions=B_actions,
                                     states=states)
         F_actions = self.reverse_backward_actions(states, B_actions)
         states = self.apply_backward_actions(states, B_actions)
+        if convert_to_tensor:
+            states = torch.nn.utils.rnn.pad_sequence(states, batch_first=True, padding_value=self.pad_sym).long()
         return states, B_actions, F_actions, P_B
 
     def calc_backward_prob(self,

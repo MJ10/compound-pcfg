@@ -10,7 +10,7 @@ class TestControllerMethods(unittest.TestCase):
     def test_sample_backward_actions_merge(self):
         controller = segmenter_controller(device='cpu', args={'nt_states': 5,
                                                               't_states': 5},
-                                                        n_vocab=7)
+                                                        n_vocab=6)
         for i in range(50):
             states = [torch.tensor([0, 0, 6, 1, 0, 6, 1, 2]),
                   torch.tensor([1, 2, 6, 4, 0, 1, 6, 3, 4, 2])]
@@ -31,7 +31,7 @@ class TestControllerMethods(unittest.TestCase):
     def test_sample_backward_actions_untag(self):
         controller = segmenter_controller(device='cpu', args={'nt_states': 5,
                                                               't_states': 5},
-                                                        n_vocab=7)
+                                                        n_vocab=6)
         for i in range(50):
             states = [torch.tensor([0, 3, 7, 0, 2, 9, 1, 2, 10]),
                     torch.tensor([1, 2, 16, 4, 16, 1, 16, 3, 4, 12])]
@@ -52,7 +52,7 @@ class TestControllerMethods(unittest.TestCase):
     def test_sample_forward_actions_split(self):
         controller = segmenter_controller(device='cpu', args={'nt_states': 5,
                                                               't_states': 5},
-                                                        n_vocab=7)
+                                                        n_vocab=6)
         for i in range(50):
             states = [torch.tensor([0, 1, 0, 6, 1, 2, 1]),
                     torch.tensor([1, 2, 1, 4, 1, 1, 6, 3, 4, 2])]
@@ -73,7 +73,7 @@ class TestControllerMethods(unittest.TestCase):
     def test_sample_forward_actions_tag(self):
         controller = segmenter_controller(device='cpu', args={'nt_states': 5,
                                                               't_states': 5},
-                                                        n_vocab=7)
+                                                        n_vocab=6)
         for i in range(50):
             states = [torch.tensor([0, 6, 0, 6, 1, 2, 1, 6]),
                     torch.tensor([1, 2, 6, 4, 6, 1, 6, 3, 4, 6])]
