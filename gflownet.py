@@ -39,7 +39,6 @@ class GFlowNet_shared_embedding(nn.Module):
         nn.init.normal_(self.embedding_pos.weight, mean=0.0, std=1/128**0.5)
 
     def forward(self, x):
-        x = x[:, x.sum(dim=0)!=0]
         assert x.max() < self.n_vocab+self.n_nts, f"input contains token id {x.max()}, but max is {self.n_vocab+self.n_nts-1}"
         encoded_tgt = self.embedding_tgt(x)
         pos_ids = create_position_ids(x)
