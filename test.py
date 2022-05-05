@@ -1,5 +1,6 @@
 from gflownet import segmenter_controller
 import torch
+from copy import deepcopy
 import unittest
 
 
@@ -15,12 +16,13 @@ class TestControllerMethods(unittest.TestCase):
             states = [torch.tensor([0, 0, 6, 1, 0, 6, 1, 2]),
                   torch.tensor([1, 2, 6, 4, 0, 1, 6, 3, 4, 2])]
             original_states = [s.clone() for s in states]
+            # import pdb; pdb.set_trace()
             new_states, B_actions, F_actions, P_B = \
                 controller.sample_backward('merge',
                                             torch.zeros(2, 10),
                                             states)
             F_actions = controller.reverse_backward_actions(states, B_actions)
-            recovered_states = controller.apply_forward_actions(new_states, F_actions)
+            recovered_states = controller.apply_forward_actions(new_states, F_actions)            
             self.assertTrue(len(new_states)==len(states))
             self.assertTrue(len(new_states)==len(B_actions[0]))
             self.assertTrue(len(new_states)==len(B_actions[1]))
@@ -57,12 +59,12 @@ class TestControllerMethods(unittest.TestCase):
             states = [torch.tensor([0, 1, 0, 6, 1, 2, 1]),
                     torch.tensor([1, 2, 1, 4, 1, 1, 6, 3, 4, 2])]
             original_states = [s.clone() for s in states]
+            # import pdb; pdb.set_trace()
             new_states, F_actions, B_actions, P_F = \
                 controller.sample_forward('split',
                                             torch.zeros(2, 10),
                                             states)
             recovered_states = controller.apply_backward_actions(new_states, B_actions)
-            #import pdb; pdb.set_trace()
             self.assertTrue(len(new_states)==len(states))
             self.assertTrue(len(new_states)==len(B_actions[0]))
             self.assertTrue(len(new_states)==len(B_actions[1]))
@@ -82,8 +84,7 @@ class TestControllerMethods(unittest.TestCase):
                 controller.sample_forward('tag',
                                             torch.zeros(2, 10, 6),
                                             states)
-            recovered_states = controller.apply_backward_actions(new_states, B_actions)
-            #import pdb; pdb.set_trace()
+            recovered_states = controller.apply_backward_actions([s.clone() for s in new_states], B_actions)
             self.assertTrue(len(new_states)==len(states))
             self.assertTrue(len(new_states)==len(B_actions[0]))
             self.assertTrue(len(new_states)==len(B_actions[1]))

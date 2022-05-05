@@ -251,7 +251,7 @@ class segmenter_controller():
                 continue
             elif action == "split":
                 # insert a split symbol at pos
-                states[i] = torch.cat([states[i][:pos+1], torch.zeros(1).to(self.device)+self.split_sym, states[i][pos+1:]], dim=0)
+                states[i] = torch.cat([states[i][:pos+1], torch.zeros(1).to(self.device)+self.split_sym, states[i][pos+1:]], dim=0).long()
             elif action == "tag":
                 # change the pos-th split symbol to tok
                 states[i][pos] = tok+self.n_vocab # need to verify that this actually modifies states
@@ -271,7 +271,7 @@ class segmenter_controller():
             elif action == "split":
                 B_actions.append('merge')
                 # return the index of the split symbol at pos
-                B_positions.append(pos)
+                B_positions.append(pos+1)
             elif action == "tag":
                 B_actions.append('untag')
                 # return the index of the split symbol at pos
@@ -392,7 +392,7 @@ class segmenter_controller():
             elif action == "merge":
                 F_actions.append('split')
                 # return the index of the pos-th split symbol
-                F_positions.append(pos)
+                F_positions.append(pos-1)
                 F_tokens.append(0)
             elif action == "untag":
                 F_actions.append('tag')
