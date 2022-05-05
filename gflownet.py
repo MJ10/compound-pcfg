@@ -113,7 +113,8 @@ class segmenter_controller():
         self.n_vocab = n_vocab
         self.pcfg = pcfg
         self.ar_model = ar_model
-        #self.split_sym = n_vocab + args.t_states + args.nt_states
+        self.split_sym = n_vocab
+        self.pad_sym = n_vocab + args.t_states + args.nt_states
 
     def sample_forward(self,
                     action : str,
@@ -122,13 +123,14 @@ class segmenter_controller():
                     temperature_pos : float = 1.,):
         if type(states) is not list:
             # convert states to a list and remove padding
-            states = [sent[sent!=self.n_vocab+self.args['n_nts']] for sent in states]
+            states = [sent[sent!=self.pad_sym] for sent in states]
         F_actions = self._sample_forward_actions(action, F_logits, states, temperature_pos)
         P_F = self.calc_forward_prob(F_logits=F_logits,
                                     F_actions=F_actions,
                                     states=states)
         B_actions = self.reverse_forward_actions(states, F_actions)
         states = self.apply_forward_actions(states, F_actions)
+        states = torch.nn.utils.rnn.pad_sequence(states, batch_first=True, padding_value=self.pad_sym).long()
         return states, F_actions, B_actions, P_F
     
 
@@ -138,7 +140,7 @@ class segmenter_controller():
                         F_actions: tuple = None,):
         if type(states) is not list:
             # convert states to a list and remove padding
-            states = [sent[sent!=self.n_vocab+self.args['n_nts']] for sent in states]
+            states = [sent[sent!=self.pad_sym] for sent in states]
         logF_prob = []
         for i, state in enumerate(states):
             # if the action is none, the associated log probability is 0
@@ -147,13 +149,13 @@ class segmenter_controller():
                 continue
             elif F_actions[0][i] == "split":
                 mask = torch.zeros(state.size()).to(self.device)
-                mask[state>=self.args['split_sym']] = -100
+                mask[state>=self.split_sym] = -100
                 # take softmax
                 logP_pos = F.log_softmax(F_logits[i, :state.size(-1)]+mask, dim=-1)
                 logF_prob.append(logP_pos[F_actions[1][i]])
             elif F_actions[0][i] == "tag":
                 mask = torch.zeros(state.size()).to(self.device)
-                mask[state!=self.args['split_sym']] = -100
+                mask[state!=self.split_sym] = -100
                 # take softmax
                 logP_pos = F.log_softmax(F_logits[i, :state.size(-1), 0]+mask, dim=-1)
                 logP_tok = F.log_softmax(F_logits[i, F_actions[1][i], 1:], dim=-1)
@@ -172,7 +174,7 @@ class segmenter_controller():
         for i, state in enumerate(states):
             if action == "split":
                 # if sf, add none to actions
-                if state[state!=self.args['pad_sym']][-1] >= self.args['split_sym']:
+                if state[state!=self.pad_sym][-1] == self.split_sym:
                     actions.append('none')
                     positions.append(0)
                     tokens.append(0)
@@ -183,13 +185,25 @@ class segmenter_controller():
                 # 2. mask the two tokens before and the one tokens after every split symbol
                 # 3. the last token is always unmasked
                 mask = torch.zeros(state.size()).to(self.device)
-                mask[(state>=self.args['split_sym'])] = -100
-                left_one_mask = torch.cat([state[1:], torch.zeros(1).to(self.device)-100], dim=0)
-                left_two_mask = torch.cat([state[2:], torch.zeros(2).to(self.device)-100], dim=0)
-                right_one_mask = torch.cat([torch.zeros(1).to(self.device)-100, state[:-1]], dim=0)
-                mask += left_one_mask + left_two_mask + right_one_mask
+                split_idx = (state==self.split_sym).nonzero()
+                mask[split_idx] = -100
+                left_one = split_idx - 1
+                left_one = left_one[left_one >= 0]
+                mask[left_one] = -100
+                left_two = split_idx - 2
+                left_two = left_two[left_two >= 0]
+                mask[left_two] = -100
+                right_one = split_idx + 1
+                right_one = right_one[right_one < state.size(-1)]
+                mask[right_one] = -100
+                # left_one_mask = torch.cat([state[1:], torch.zeros(1).to(self.device)-100], dim=0)
+                # left_two_mask = torch.cat([state[2:], torch.zeros(2).to(self.device)-100], dim=0)
+                # right_one_mask = torch.cat([torch.zeros(1).to(self.device)-100, state[:-1]], dim=0)
+                # mask += left_one_mask + left_two_mask + right_one_mask
                 mask[-1] = 0
-                mask[mask!=0] = -100
+                mask[-2] = -100
+                mask[0] = -100
+                # mask[mask!=0] = -100
                 # take softmax over positions
                 P_pos = F.softmax(F_logits[i, :state.size(-1)]/temperature_pos+mask, dim=-1)
                 F_pos = torch.multinomial(P_pos, 1).item()
@@ -197,14 +211,14 @@ class segmenter_controller():
                 tokens.append(0)
             elif action == "tag":
                 # if sf, add none to actions
-                if (state[state!=self.args['pad_sym']][-1] >= self.args['split_sym']) and (state[state==self.args['split_sym']].sum().item() == 0):
+                if (state[state!=self.pad_sym][-1] >= self.split_sym) and (state[state==self.split_sym].sum().item() == 0):
                     actions.append('none')
                     positions.append(0)
                     tokens.append(0)
                     continue
                 # otherwise, pick a tag to reverse back to a split symbol
                 mask = torch.zeros(state.size()).to(self.device)
-                mask[state!=self.args['split_sym']] = -100
+                mask[state!=self.split_sym] = -100
                 # take softmax
                 P_pos = F.softmax(F_logits[i, :state.size(-1), 0]/temperature_pos+mask, dim=-1)
                 F_pos = torch.multinomial(P_pos, 1).item()
@@ -230,10 +244,10 @@ class segmenter_controller():
                 continue
             elif action == "split":
                 # insert a split symbol at pos
-                states[i] = torch.cat([states[i][:pos], torch.zeros(1).to(self.device)+self.args['split_sym'], states[i][pos:]], dim=0)
+                states[i] = torch.cat([states[i][:pos+1], torch.zeros(1).to(self.device)+self.split_sym, states[i][pos+1:]], dim=0)
             elif action == "tag":
                 # change the pos-th split symbol to tok
-                states[i][pos] = tok+self.args['n_vocab'] # need to verify that this actually modifies states
+                states[i][pos] = tok+self.n_vocab # need to verify that this actually modifies states
         return states
 
     @torch.no_grad()
@@ -264,7 +278,7 @@ class segmenter_controller():
                         temperature_pos : float = 1.):
         if type(states) is not list:
             # convert states to a list and remove padding
-            states = [sent[sent!=self.n_vocab+self.args['n_nts']] for sent in states]
+            states = [sent[sent!=self.pad_sym] for sent in states]
         B_actions = self._sample_backward_actions(action, B_logits, states, temperature_pos)
         P_B = self.calc_backward_prob(B_logits=B_logits,
                                     B_actions=B_actions,
@@ -279,7 +293,7 @@ class segmenter_controller():
                         B_actions: tuple):
         if type(states) is not list:
             # convert states to a list and remove padding
-            states = [sent[sent!=self.n_vocab+self.args['n_nts']] for sent in states]
+            states = [sent[sent!=self.pad_sym] for sent in states]
         logB_prob = []
         for i, state in enumerate(states):
             # if the action is none, the associated log probability is 0
@@ -288,10 +302,10 @@ class segmenter_controller():
                 continue
             elif B_actions[0][i] == "merge":
                 mask = torch.zeros(state.size()).to(self.device)
-                mask[state!=self.args['split_sym']] = -100
+                mask[state!=self.split_sym] = -100
             elif B_actions[0][i] == "untag":
                 mask = torch.zeros(state.size()).to(self.device)
-                mask[state<=self.args['split_sym']] = -100
+                mask[state<=self.split_sym] = -100
             # take softmax
             lpgP_pos = F.log_softmax(B_logits[i, :state.size(-1)]+mask, dim=-1)
             logB_prob.append(lpgP_pos[B_actions[1][i]])
@@ -307,26 +321,26 @@ class segmenter_controller():
         for i, state in enumerate(states):
             if action == "merge":
                 # if s0, add none to actions
-                if state[state>=self.args['split_sym']].sum().item() == 0:
+                if state[state>=self.split_sym].sum().item() == 0:
                     actions.append('none')
                     positions.append(0)
                     continue
                 # otherwise, sample a split symbol to delete by first constructing a mask
                 mask = torch.zeros(state.size()).to(self.device)
-                mask[state<self.args['split_sym']] = -100
+                mask[state<self.split_sym] = -100
                 # take softmax
                 P_pos = F.softmax(B_logits[i, :state.size(-1)]/temperature_pos+mask, dim=-1)
                 B_pos = torch.multinomial(P_pos, 1).item()
                 positions.append(B_pos)
             elif action == "untag":
                 # if s0, add none to actions
-                if state[state>self.args['split_sym']].sum().item() == 0:
+                if state[state>self.split_sym].sum().item() == 0:
                     actions.append('none')
                     positions.append(0)
                     continue
                 # otherwise, pick a tag to reverse back to a split symbol
                 mask = torch.zeros(state.size()).to(self.device)
-                mask[state<=self.args['split_sym']] = -100
+                mask[state<=self.split_sym] = -100
                 # take softmax
                 P_pos = F.softmax(B_logits[i, :state.size(-1)]/temperature_pos+mask, dim=-1)
                 B_pos = torch.multinomial(P_pos, 1).item()
@@ -347,7 +361,7 @@ class segmenter_controller():
                 states[i] = torch.cat([states[i][:pos], states[i][pos+1:]], dim=0)
             elif action == "untag":
                 # change the pos-th symbol to a split symbol
-                states[i][pos] = self.args['split_sym']
+                states[i][pos] = self.split_sym
         return states
 
     @torch.no_grad()
@@ -372,7 +386,7 @@ class segmenter_controller():
                 F_actions.append('tag')
                 # return the index of the pos-th split symbol
                 F_positions.append(pos)
-                F_tokens.append(states[i][pos].item()-self.args['n_vocab'])
+                F_tokens.append(states[i][pos].item()-self.n_vocab)
         return (F_actions, F_positions, F_tokens)
     
 
@@ -386,29 +400,31 @@ class segmenter_controller():
     def calc_log_reward(self, seqs):
         spans = []
         tag_seqs = []
-
+        seqs = [sent[sent!=self.pad_sym] for sent in seqs]
         for seq in seqs:
-            nt_positions = torch.nonzero(seq == self.args['split_sym'])
-            p = [-1] + list(nt_positions.cpu().numpy())
-            spans += [ seq[p[i]+1:p[i+1]] for i in range(len(p)) ]
-            tag_seqs.append(seq[nt_positions] - self.args['n_vocab'])
+            nt_positions = torch.nonzero(seq > self.n_vocab)
+            p = [-1] + nt_positions.cpu().numpy().flatten().tolist()
+            spans += [ seq[p[i]+1:p[i+1]] for i in range(len(p) - 1) ]
+            # import pdb; pdb.set_trace();
+            tag_seqs.append(seq[nt_positions].flatten() - self.n_vocab)
 
         x = torch.nn.utils.rnn.pad_sequence(spans, batch_first=True)
-        lengths = torch.Tensor(list(map(len, spans))).to(x.device)
-        tree_lls = self.pcfg.batch_marginal_with_roots(self, x, lengths, torch.cat(tag_seqs, 0))
+        lengths = torch.Tensor(list(map(len, spans))).to(x.device).long()
+        # import pdb;pdb.set_trace();
+        tree_lls = self.pcfg.batch_marginal_with_roots(x, lengths, torch.cat(tag_seqs, 0))
 
-        pad_value = self.args['nt_states']+1
-        x_tag = torch.nn.utils.rnn.pad_sequence(tag_seqs, padding_value=pad_value)
-        start_end = T.full_like(x_tag[:,:1], self.args['split_sym'])
-        x_tag = T.cat([ start_end, x_tag, start_end ], 1)
-        outs = ar_model(x_tag.transpose(0,1)).log_softmax(-1).transpose(0,1)
-        token_lls = outs[:,:-1].gather(3, x_tag[:,1:].unsqueeze(2)).squeeze(2)
+        pad_value = self.args.nt_states+1
+        x_tag = torch.nn.utils.rnn.pad_sequence(tag_seqs, batch_first=True, padding_value=pad_value)
+        start_end = torch.full_like(x_tag[:,:1], self.args.nt_states)
+        x_tag = torch.cat([ start_end, x_tag, start_end ], 1)
+        outs = self.ar_model(x_tag.transpose(0,1)).log_softmax(-1).transpose(0,1)
+        token_lls = outs[:,:-1].gather(2, x_tag[:,1:].unsqueeze(2)).squeeze(2)
         ar_lls = (token_lls * (x_tag[:,1:]!=pad_value).float()).sum(1)
 
         lr = torch.zeros((len(seqs),), device=x.device)
         start = 0
         for i, ar_ll, tag_seq in zip(range(len(seqs)), ar_lls, tag_seqs):
-            lr[i] = ar_ll + tree_lls[start:start+len(tag_seq)]
+            lr[i] = ar_ll + tree_lls[start:start+len(tag_seq)].sum()
             start += len(tag_seq)
     
         return lr

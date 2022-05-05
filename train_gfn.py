@@ -55,8 +55,8 @@ def main(args):
   np.random.seed(args.seed)
   torch.manual_seed(args.seed)
   if args.minimal_dataloader:
-    corpus = MinimalDataset(args.data, 1000, batch_size=args.batch_size,
-                              batch_group_size=999999, add_master_token=False)
+    corpus = MinimalDataset(args.data, args.max_length, batch_size=args.batch_size,
+                              batch_group_size=999999, add_master_token=False, pad_value=args.t_states+args.nt_states)
     train_data = corpus.train
     train_lens = corpus.train_lens
     # print(train_data[0])
@@ -90,7 +90,7 @@ def main(args):
                      num_layers = 2,
                      hidden_dim = 128)
   gfn_Z = GFlowNet_Z(args.state_dim)
-  gfn_emb = GFlowNet_shared_embedding(vocab_size, args.state_dim, 60, args.nt_states)
+  gfn_emb = GFlowNet_shared_embedding(vocab_size+1, args.state_dim, 60, args.nt_states + args.t_states)
   gfn_encoder = GFlowNet_encoder(args.state_dim, 4, 4*args.state_dim, 0.1, True, 4, shared_embedding=gfn_emb)
   gfn_forward_split = GFlowNet_forward_split(args.state_dim)
   gfn_forward_tag = GFlowNet_forward_tag(args.nt_states, args.state_dim)
@@ -159,10 +159,11 @@ def main(args):
       num_words += sum(lengths)+len(lengths)
 
       # sample GFlowNet for sequence
-      state = torch.nn.utils.rnn.pad_sequence(sents, batch_first=True, padding_value=vocab_size+args.t_states+args.nt_states)
-      logZ, logPF, logPB, sents = sample_gfn(state, controller, gfn_Z, gfn_encoder, gfn_forward_split, gfn_forward_tag, gfn_backward)
+      # state = torch.nn.utils.rnn.pad_sequence(sents, batch_first=True, padding_value=vocab_size+args.t_states+args.nt_states)
+      state = sents
+      logZ, logPF, logPB, state = sample_gfn(state, controller, gfn_Z, gfn_encoder, gfn_forward_split, gfn_forward_tag, gfn_backward, vocab_size)
       logR = controller.calc_log_reward(state)
-      tb_loss = (logZ + logPF - logPB - logR.detach()**2).mean()
+      tb_loss = ((logZ + logPF - logPB - logR.detach()) ** 2).mean()
 
       gfn_optimizer.zero_grad()
       tb_loss.backward(retain_graph=True)
@@ -209,7 +210,7 @@ def main(args):
     args.max_length = min(args.final_max_length, args.max_length + args.len_incr)
     print('--------------------------------')
     print('Checking validation perf...')    
-    val_ppl, val_f1 = eval(val_data, val_lens, model, ar_model, controller, gfn_Z, gfn_encoder, gfn_forward_split, gfn_forward_tag, gfn_backward)
+    val_ppl, val_f1 = eval(val_data, val_lens, model, ar_model, controller, gfn_Z, gfn_encoder, gfn_forward_split, gfn_forward_tag, gfn_backward, vocab_size)
     print('--------------------------------')
     if val_ppl < best_val_ppl:
       best_val_ppl = val_ppl
@@ -225,7 +226,7 @@ def main(args):
       model.cuda()
 
 def eval(data, data_lens, model, ar_model,
-         controller, gfn_Z, gfn_encoder, gfn_forward_split, gfn_forward_tag, gfn_backward):
+         controller, gfn_Z, gfn_encoder, gfn_forward_split, gfn_forward_tag, gfn_backward, vocab_size):
   model.eval()
   ar_model.eval()
   num_sents = 0
@@ -253,9 +254,10 @@ def eval(data, data_lens, model, ar_model,
       num_sents += batch_size
       num_words += sum(lengths)+len(lengths)
 
-      state = torch.nn.utils.rnn.pad_sequence(sents, batch_first=True, padding_value=args.vocab_size+args.t_states+args.nt_states)
+      # state = torch.nn.utils.rnn.pad_sequence(sents, batch_first=True, padding_value=vocab_size+args.t_states+args.nt_states)
       # sample GFlowNet for sequence
-      logZ, logPF, logPB, state = sample_gfn(state, controller, gfn_Z, gfn_encoder, gfn_forward_split, gfn_forward_tag, gfn_backward)
+      state=sents
+      logZ, logPF, logPB, state = sample_gfn(state, controller, gfn_Z, gfn_encoder, gfn_forward_split, gfn_forward_tag, gfn_backward,vocab_size)
       logR = controller.calc_log_reward(state)
 
       total_nll += logR.sum().item()
@@ -299,11 +301,11 @@ def eval(data, data_lens, model, ar_model,
   ar_model.train()
   return ppl_elbo, sent_f1*100 if not args.minimal_dataloader else 0
 
-def sample_gfn(state, controller, gfn_Z, gfn_encoder, gfn_forward_split, gfn_forward_tag, gfn_backward):
+def sample_gfn(state, controller, gfn_Z, gfn_encoder, gfn_forward_split, gfn_forward_tag, gfn_backward, vocab_size):
   def done_splitting(state):
     result = []
     for padded_sent in state:
-      if padded_sent[padded_sent!=args.vocab_size+args.nt_states][-1] == args.vocab_size:
+      if padded_sent[padded_sent!=vocab_size+args.nt_states+args.t_states][-1] == vocab_size:
         result.append(True)
       else:
         result.append(False)
@@ -312,46 +314,49 @@ def sample_gfn(state, controller, gfn_Z, gfn_encoder, gfn_forward_split, gfn_for
   def done_tagging(state):
     result = []
     for padded_sent in state:
-      if padded_sent[padded_sent==args.vocab_size].sum() == 0:
+      if padded_sent[padded_sent==vocab_size].sum() == 0:
         result.append(True)
       else:
         result.append(False)
     return result
   
-  pad_mask = torch.zero_like(state)
-  pad_mask[state==args.vocab_size+args.nt_states] = -float('inf')
+  pad_mask = torch.zeros_like(state).to(torch.float)
+  pad_mask[state==vocab_size+args.nt_states+args.t_states] = -float('inf')
 
   logPF = torch.zeros(state.shape[0], device=device)
   logPB = torch.zeros(state.shape[0], device=device)
   # Phase I:
   #  - get logZ
-  logZ = gfn_Z(state, pad_mask)
+  encoded_sents = gfn_encoder(state, pad_mask)
+  logZ = gfn_Z(encoded_sents, pad_mask)
   # Phase II:
   #  - split the seqs until the last token is a split symbol
-  encoded_sents = gfn_encoder(state)
-  while all(done_splitting(state)):
-    _, _, B_actions, _logPF = \
+  while not all(done_splitting(state)):
+    state, _, B_actions, _logPF = \
                 controller.sample_forward('split',
                                           gfn_forward_split(encoded_sents),
                                           state)
+    pad_mask = torch.zeros_like(state).to(torch.float)
+    pad_mask[state==vocab_size+args.nt_states+args.t_states] = -float('inf')
     encoded_sents = gfn_encoder(state, pad_mask)
     _logPB = controller.calc_backward_prob(gfn_backward(encoded_sents),
-                                          new_sents,
+                                          state,
                                           B_actions)
-    encoded_sents = gfn_encoder(state, pad_mask)
+    # encoded_sents = gfn_encoder(state, pad_mask)
+    # state = new_state
     logPF += _logPF
     logPB += _logPB
   # Phase III:
   #  - tag all the split symbols until there are none left
   encoded_sents = gfn_encoder(state, pad_mask)
-  while all(done_tagging(state)):
-    new_sents, _, B_actions, _logPF = \
+  while not all(done_tagging(state)):
+    state, _, B_actions, _logPF = \
                 controller.sample_forward('tag',
                                           gfn_forward_tag(encoded_sents),
                                           state)
     encoded_sents = gfn_encoder(state, pad_mask)
     _logPB = controller.calc_backward_prob(gfn_backward(encoded_sents),
-                                          new_sents,
+                                          state,
                                           B_actions)
     encoded_sents = gfn_encoder(state, pad_mask)
     logPF += _logPF

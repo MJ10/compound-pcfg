@@ -26,7 +26,7 @@ from collections import defaultdict
 
 
 class MinimalDataset(object):
-  def __init__(self, path, seqlen=-1, batch_size=1, batch_group_size=100, add_master_token=False, device='cuda'):
+  def __init__(self, path, seqlen=-1, batch_size=1, batch_group_size=100, add_master_token=False, device='cuda', pad_value=0):
     self.dict = Dictionary()
     self.train = None
     self.valid = None
@@ -36,6 +36,7 @@ class MinimalDataset(object):
     self.batch_size = batch_size
     self.batch_group_size = batch_group_size
     self.add_master_token = add_master_token
+    self.pad_value = pad_value
     # add special tokens
     self.dict.add_word('<pad>')
     self.dict.add_word('<MT>')
@@ -52,8 +53,7 @@ class MinimalDataset(object):
       tmp_copy = getattr(self, loader+"_lens")
       tmp_copy = tmp_copy[:tmp_copy.size(0)//self.batch_size*self.batch_size]
       setattr(self, loader + "_lens", tmp_copy.reshape(tmp_copy.size(0) // self.batch_size, self.batch_size))
-
-      # import pdb; pdb.set_trace();
+    self.dict.add_word('<Split>')
 
   def sort_n_shuffle(self, dataloader):
     dataloader = sorted(dataloader, key=lambda x:len(x))
@@ -116,7 +116,7 @@ class MinimalDataset(object):
           src_ids.append(self.dict.word2idx[word])
         src_idss.append(torch.tensor(src_ids, device=self.device).type(torch.int64))
     src_idss, lengths = self.sort_n_shuffle(src_idss)
-    src_idss = torch.nn.utils.rnn.pad_sequence(src_idss, batch_first=True)
+    src_idss = torch.nn.utils.rnn.pad_sequence(src_idss, batch_first=True, padding_value=self.pad_value + len(self.dict.idx2word)+1)
     lengths = torch.tensor(lengths)
     return src_idss, lengths
 

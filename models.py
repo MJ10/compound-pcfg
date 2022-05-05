@@ -125,7 +125,7 @@ class CompPCFG(nn.Module):
     t_emb = self.t_emb
     nt_emb = self.nt_emb
 
-    t_emb = t_emb.unsqueeze(0).unsqueeze(1).expand(batch_size, n, self.t_states, self.state_dim)
+    t_emb = t_emb.unsqueeze(0).unsqueeze(1).expand(batch_size, l, self.t_states, self.state_dim)
     nt_emb = nt_emb.unsqueeze(0).expand(batch_size, self.nt_states, self.state_dim)
 
     root_scores = torch.nn.functional.one_hot(tags, self.nt_states).float().clamp(min=1e-32).log()
