@@ -259,8 +259,8 @@ def eval(data, data_lens, model, ar_model,
       state=sents
       logZ, logPF, logPB, state = sample_gfn(state, controller, gfn_Z, gfn_encoder, gfn_forward_split, gfn_forward_tag, gfn_backward,vocab_size)
       logR = controller.calc_log_reward(state)
-
-      total_nll += logR.sum().item()
+      print(state[0])
+      total_nll -= logR.sum().item()
       # if not args.minimal_dataloader:
       #   for b in range(batch_size):
       #     span_b = [(a[0], a[1]) for a in argmax_spans[b]] #ignore labels

@@ -37,9 +37,6 @@ class MinimalDataset(object):
     self.batch_group_size = batch_group_size
     self.add_master_token = add_master_token
     self.pad_value = pad_value
-    # add special tokens
-    self.dict.add_word('<pad>')
-    self.dict.add_word('<MT>')
     if not self.load_cache(path):
       self.train, self.train_lens = self.tokenize(os.path.join(path, 'train'))
       self.valid, self.valid_lens = self.tokenize(os.path.join(path, 'valid'))
@@ -106,7 +103,7 @@ class MinimalDataset(object):
       for src_line in src_f:
         src_ids = []
         if self.add_master_token:
-          src_words = ['<MT>'] + src_line.split()
+          src_words = src_line.split()
         else:
           src_words = src_line.split()
         if self.seqlen > 0 and (len(src_words) > self.seqlen):
