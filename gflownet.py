@@ -327,7 +327,7 @@ class segmenter_controller():
                                 action : str,
                                 B_logits: torch.Tensor,
                                 states: list,
-                                temperature_pos : float = -1.,):
+                                temperature_pos : float = 1.,):
         actions = []
         positions = []
         for i, state in enumerate(states):
