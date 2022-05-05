@@ -114,7 +114,7 @@ class segmenter_controller():
         self.pcfg = pcfg
         self.ar_model = ar_model
         self.split_sym = n_vocab
-        self.pad_sym = n_vocab + args.t_states + args.nt_states
+        self.pad_sym = n_vocab + args.t_states + args.nt_states + 1
 
     def sample_forward(self,
                     action : str,

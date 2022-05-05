@@ -50,7 +50,6 @@ class MinimalDataset(object):
       tmp_copy = getattr(self, loader+"_lens")
       tmp_copy = tmp_copy[:tmp_copy.size(0)//self.batch_size*self.batch_size]
       setattr(self, loader + "_lens", tmp_copy.reshape(tmp_copy.size(0) // self.batch_size, self.batch_size))
-    self.dict.add_word('<Split>')
 
   def sort_n_shuffle(self, dataloader):
     dataloader = sorted(dataloader, key=lambda x:len(x))

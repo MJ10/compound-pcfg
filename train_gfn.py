@@ -63,7 +63,7 @@ def main(args):
     # import pdb;pdb.set_trace();
     val_data = corpus.valid
     val_lens = corpus.valid_lens
-    vocab_size = len(corpus.dict.idx2word)  
+    vocab_size = len(corpus.dict.idx2word)
     max_len = train_data.shape[1]
     print('Train: %d sents / %d batches, Val: %d sents / %d batches' % 
         (train_data.size(0), len(train_data), val_data.size(0), len(val_data)))
@@ -90,7 +90,7 @@ def main(args):
                      num_layers = 2,
                      hidden_dim = 128)
   gfn_Z = GFlowNet_Z(args.state_dim)
-  gfn_emb = GFlowNet_shared_embedding(vocab_size+1, args.state_dim, 60, args.nt_states + args.t_states)
+  gfn_emb = GFlowNet_shared_embedding(vocab_size+1, args.state_dim, 60, args.nt_states + args.t_states+1)
   gfn_encoder = GFlowNet_encoder(args.state_dim, 4, 4*args.state_dim, 0.1, True, 4, shared_embedding=gfn_emb)
   gfn_forward_split = GFlowNet_forward_split(args.state_dim)
   gfn_forward_tag = GFlowNet_forward_tag(args.nt_states, args.state_dim)
@@ -302,10 +302,11 @@ def eval(data, data_lens, model, ar_model,
   return ppl_elbo, sent_f1*100 if not args.minimal_dataloader else 0
 
 def sample_gfn(state, controller, gfn_Z, gfn_encoder, gfn_forward_split, gfn_forward_tag, gfn_backward, vocab_size):
+  pad_sym = vocab_size+args.nt_states+args.t_states+1
   def done_splitting(state):
     result = []
     for padded_sent in state:
-      if padded_sent[padded_sent!=vocab_size+args.nt_states+args.t_states][-1] == vocab_size:
+      if padded_sent[padded_sent!=pad_sym][-1] == vocab_size:
         result.append(True)
       else:
         result.append(False)
@@ -321,8 +322,7 @@ def sample_gfn(state, controller, gfn_Z, gfn_encoder, gfn_forward_split, gfn_for
     return result
   
   pad_mask = torch.zeros_like(state).to(torch.float)
-  pad_mask[state==vocab_size+args.nt_states+args.t_states] = -float('inf')
-
+  pad_mask[state==pad_sym] = -float('inf')
   logPF = torch.zeros(state.shape[0], device=device)
   logPB = torch.zeros(state.shape[0], device=device)
   # Phase I:
@@ -337,7 +337,7 @@ def sample_gfn(state, controller, gfn_Z, gfn_encoder, gfn_forward_split, gfn_for
                                           gfn_forward_split(encoded_sents),
                                           state)
     pad_mask = torch.zeros_like(state).to(torch.float)
-    pad_mask[state==vocab_size+args.nt_states+args.t_states] = -float('inf')
+    pad_mask[state==pad_sym] = -float('inf')
     encoded_sents = gfn_encoder(state, pad_mask)
     _logPB = controller.calc_backward_prob(gfn_backward(encoded_sents),
                                           state,
