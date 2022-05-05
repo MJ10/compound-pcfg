@@ -40,7 +40,7 @@ parser.add_argument('--w_dim', default=512, type=int, help='embedding dim for va
 parser.add_argument('--num_epochs', default=10, type=int, help='number of training epochs')
 parser.add_argument('--lr', default=0.001, type=float, help='starting learning rate')
 parser.add_argument('--max_grad_norm', default=3, type=float, help='gradient clipping parameter')
-parser.add_argument('--max_length', default=30, type=float, help='max sentence length cutoff start')
+parser.add_argument('--max_length', default=40, type=float, help='max sentence length cutoff start')
 parser.add_argument('--len_incr', default=1, type=int, help='increment max length each epoch')
 parser.add_argument('--final_max_length', default=40, type=int, help='final max length cutoff')
 parser.add_argument('--beta1', default=0.75, type=float, help='beta1 for adam')
@@ -64,6 +64,7 @@ def main(args):
     val_data = corpus.valid
     val_lens = corpus.valid_lens
     vocab_size = len(corpus.dict.idx2word)
+    print(vocab_size)
     max_len = train_data.shape[1]
     print('Train: %d sents / %d batches, Val: %d sents / %d batches' % 
         (train_data.size(0), len(train_data), val_data.size(0), len(val_data)))
@@ -162,6 +163,7 @@ def main(args):
       # state = torch.nn.utils.rnn.pad_sequence(sents, batch_first=True, padding_value=vocab_size+args.t_states+args.nt_states)
       state = sents
       logZ, logPF, logPB, state = sample_gfn(state, controller, gfn_Z, gfn_encoder, gfn_forward_split, gfn_forward_tag, gfn_backward, vocab_size)
+      # print(state[0])
       logR = controller.calc_log_reward(state)
       tb_loss = ((logZ + logPF - logPB - logR.detach()) ** 2).mean()
 
@@ -210,6 +212,7 @@ def main(args):
     args.max_length = min(args.final_max_length, args.max_length + args.len_incr)
     print('--------------------------------')
     print('Checking validation perf...')    
+    # import pdb; pdb.set_trace();
     val_ppl, val_f1 = eval(val_data, val_lens, model, ar_model, controller, gfn_Z, gfn_encoder, gfn_forward_split, gfn_forward_tag, gfn_backward, vocab_size)
     print('--------------------------------')
     if val_ppl < best_val_ppl:
@@ -327,7 +330,11 @@ def sample_gfn(state, controller, gfn_Z, gfn_encoder, gfn_forward_split, gfn_for
   logPB = torch.zeros(state.shape[0], device=device)
   # Phase I:
   #  - get logZ
-  encoded_sents = gfn_encoder(state, pad_mask)
+  try:
+    encoded_sents = gfn_encoder(state, pad_mask)
+  except Exception as e:
+    import pdb; pdb.set_trace();
+    encoded_sents = gfn_encoder(state, pad_mask)
   logZ = gfn_Z(encoded_sents, pad_mask)
   # Phase II:
   #  - split the seqs until the last token is a split symbol

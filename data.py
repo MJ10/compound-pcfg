@@ -41,6 +41,9 @@ class MinimalDataset(object):
       self.train, self.train_lens = self.tokenize(os.path.join(path, 'train'))
       self.valid, self.valid_lens = self.tokenize(os.path.join(path, 'valid'))
       self.test, self.test_lens = self.tokenize(os.path.join(path, 'test'))
+      self.train = torch.nn.utils.rnn.pad_sequence(self.train, batch_first=True, padding_value=self.pad_value + len(self.dict.idx2word)+1)
+      self.valid = torch.nn.utils.rnn.pad_sequence(self.valid, batch_first=True, padding_value=self.pad_value + len(self.dict.idx2word)+1)
+      self.test = torch.nn.utils.rnn.pad_sequence(self.test, batch_first=True, padding_value=self.pad_value + len(self.dict.idx2word)+1)
       self.save_cache(path)
     for loader in ['train', 'valid', 'test']:
       tmp_copy = getattr(self, loader)
@@ -50,6 +53,7 @@ class MinimalDataset(object):
       tmp_copy = getattr(self, loader+"_lens")
       tmp_copy = tmp_copy[:tmp_copy.size(0)//self.batch_size*self.batch_size]
       setattr(self, loader + "_lens", tmp_copy.reshape(tmp_copy.size(0) // self.batch_size, self.batch_size))
+    # import pdb; pdb.set_trace();
 
   def sort_n_shuffle(self, dataloader):
     dataloader = sorted(dataloader, key=lambda x:len(x))
@@ -112,7 +116,8 @@ class MinimalDataset(object):
           src_ids.append(self.dict.word2idx[word])
         src_idss.append(torch.tensor(src_ids, device=self.device).type(torch.int64))
     src_idss, lengths = self.sort_n_shuffle(src_idss)
-    src_idss = torch.nn.utils.rnn.pad_sequence(src_idss, batch_first=True, padding_value=self.pad_value + len(self.dict.idx2word)+1)
+    print(len(self.dict.idx2word), self.pad_value, self.pad_value + len(self.dict.idx2word)+1)
+    # src_idss = torch.nn.utils.rnn.pad_sequence(src_idss, batch_first=True, padding_value=self.pad_value + len(self.dict.idx2word)+1)
     lengths = torch.tensor(lengths)
     return src_idss, lengths
 
