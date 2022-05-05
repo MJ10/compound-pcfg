@@ -8,11 +8,12 @@ class TestControllerMethods(unittest.TestCase):
     device = torch.device("cpu")
     
     def test_sample_backward_actions_merge(self):
-        controller = segmenter_controller(device='cpu', args={'pad_sym': 5,
-                                                              'split_sym': 6})
+        controller = segmenter_controller(device='cpu', args={'nt_states': 5,
+                                                              't_states': 5},
+                                                        n_vocab=7)
         for i in range(50):
-            states = [torch.tensor([0, 6, 0, 6, 1, 2]),
-                  torch.tensor([1, 2, 6, 4, 6, 1, 6, 3, 4, 2])]
+            states = [torch.tensor([0, 0, 6, 1, 0, 6, 1, 2]),
+                  torch.tensor([1, 2, 6, 4, 0, 1, 6, 3, 4, 2])]
             original_states = [s.clone() for s in states]
             new_states, B_actions, F_actions, P_B = \
                 controller.sample_backward('merge',
@@ -28,11 +29,11 @@ class TestControllerMethods(unittest.TestCase):
             self.assertTrue(all([(x==y).all() for x, y in zip(recovered_states, original_states)]))
 
     def test_sample_backward_actions_untag(self):
-        controller = segmenter_controller(device='cpu', args={'n_vocab': 5,
-                                                              'pad_sym': 5,
-                                                              'split_sym': 6})
+        controller = segmenter_controller(device='cpu', args={'nt_states': 5,
+                                                              't_states': 5},
+                                                        n_vocab=7)
         for i in range(50):
-            states = [torch.tensor([0, 7, 0, 9, 1, 2, 10]),
+            states = [torch.tensor([0, 3, 7, 0, 2, 9, 1, 2, 10]),
                     torch.tensor([1, 2, 16, 4, 16, 1, 16, 3, 4, 12])]
             original_states = [s.clone() for s in states]
             new_states, B_actions, F_actions, P_B = \
@@ -49,8 +50,9 @@ class TestControllerMethods(unittest.TestCase):
             self.assertTrue(all([(x==y).all() for x, y in zip(recovered_states, original_states)]))
     
     def test_sample_forward_actions_split(self):
-        controller = segmenter_controller(device='cpu', args={'pad_sym': 5,
-                                                              'split_sym': 6})
+        controller = segmenter_controller(device='cpu', args={'nt_states': 5,
+                                                              't_states': 5},
+                                                        n_vocab=7)
         for i in range(50):
             states = [torch.tensor([0, 1, 0, 6, 1, 2, 1]),
                     torch.tensor([1, 2, 1, 4, 1, 1, 6, 3, 4, 2])]
@@ -69,9 +71,9 @@ class TestControllerMethods(unittest.TestCase):
             self.assertTrue(all([(x==y).all() for x, y in zip(recovered_states, original_states)]))
 
     def test_sample_forward_actions_tag(self):
-        controller = segmenter_controller(device='cpu', args={'n_vocab': 5,
-                                                              'pad_sym': 5,
-                                                              'split_sym': 6})
+        controller = segmenter_controller(device='cpu', args={'nt_states': 5,
+                                                              't_states': 5},
+                                                        n_vocab=7)
         for i in range(50):
             states = [torch.tensor([0, 6, 0, 6, 1, 2, 1, 6]),
                     torch.tensor([1, 2, 6, 4, 6, 1, 6, 3, 4, 6])]
