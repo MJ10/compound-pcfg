@@ -146,7 +146,7 @@ class ARModel(nn.Module):
     super(ARModel, self).__init__()
 
     self.embedding = nn.Embedding(V, hidden_dim)
-    self.lstm = nn.LSTM(input_size=hidden_dim, hidden_size=hidden_dim, num_layers=num_layers)
+    self.lstm = nn.LSTM(input_size=hidden_dim, hidden_size=hidden_dim, num_layers=num_layers, batch_first=True)
     self.unembedding = nn.Linear(hidden_dim, V)
 
   def forward(self,x):
