@@ -156,7 +156,25 @@ class segmenter_controller():
                 continue
             elif F_actions[0][i] == "split":
                 mask = torch.zeros(state.size()).to(self.device)
-                mask[state>=self.split_sym] = -100
+                # mask[state>=self.split_sym] = -100
+                split_idx = (state==self.split_sym).nonzero()
+                mask[split_idx] = -100
+                left_one = split_idx - 1
+                left_one = left_one[left_one >= 0]
+                mask[left_one] = -100
+                left_two = split_idx - 2
+                left_two = left_two[left_two >= 0]
+                mask[left_two] = -100
+                right_one = split_idx + 1
+                right_one = right_one[right_one < state.size(-1)]
+                mask[right_one] = -100
+                # left_one_mask = torch.cat([state[1:], torch.zeros(1).to(self.device)-100], dim=0)
+                # left_two_mask = torch.cat([state[2:], torch.zeros(2).to(self.device)-100], dim=0)
+                # right_one_mask = torch.cat([torch.zeros(1).to(self.device)-100, state[:-1]], dim=0)
+                # mask += left_one_mask + left_two_mask + right_one_mask
+                mask[-1] = 0
+                mask[-2] = -100
+                mask[0] = -100
                 # take softmax
                 logP_pos = F.log_softmax(F_logits[i, :state.size(-1)]+mask, dim=-1)
                 logF_prob.append(logP_pos[F_actions[1][i]])
@@ -339,7 +357,7 @@ class segmenter_controller():
                     continue
                 # otherwise, sample a split symbol to delete by first constructing a mask
                 mask = torch.zeros(state.size()).to(self.device)
-                mask[state<self.split_sym] = -100
+                mask[state!=self.split_sym] = -100
                 # take softmax
                 P_pos = F.softmax(B_logits[i, :state.size(-1)]/temperature_pos+mask, dim=-1)
                 B_pos = torch.multinomial(P_pos, 1).item()
@@ -432,7 +450,7 @@ class segmenter_controller():
         token_lls = outs[:,:-1].gather(2, x_tag[:,1:].unsqueeze(2)).squeeze(2)
         ar_lls = (token_lls * (x_tag[:,1:]!=pad_value).float()).sum(1)
 
-        # print('ts', x_tag[0])
+        # print('ts', seqs[0], x_tag[0])
         # import pdb;pdb.set_trace()
 
         lr = torch.zeros((len(seqs),), device=x.device)
@@ -440,5 +458,5 @@ class segmenter_controller():
         for i, ar_ll, tag_seq in zip(range(len(seqs)), ar_lls, tag_seqs):
             lr[i] = ar_ll + tree_lls[start:start+len(tag_seq)].sum()
             start += len(tag_seq)
-    
+
         return lr
