@@ -122,14 +122,15 @@ class segmenter_controller():
                     action : str,
                     F_logits: torch.Tensor,
                     states: torch.Tensor,
-                    temperature_pos : float = 1.,):
+                    temperature_pos : float = 1.,
+                    temperature_tok : float = 1.,):
         if type(states) is not list:
             # convert states to a list and remove padding
             states = [sent[sent!=self.pad_sym] for sent in states]
             convert_to_tensor = True
         else:
             convert_to_tensor = False
-        F_actions = self._sample_forward_actions(action, F_logits, states, temperature_pos)
+        F_actions = self._sample_forward_actions(action, F_logits, states, temperature_pos, temperature_tok)
         P_F = self.calc_forward_prob(F_logits=F_logits,
                                     F_actions=F_actions,
                                     states=states)
@@ -253,7 +254,7 @@ class segmenter_controller():
                 states[i] = torch.cat([states[i][:pos+1], torch.zeros(1).to(self.device)+self.split_sym, states[i][pos+1:]], dim=0).long()
             elif action == "tag":
                 # change the pos-th split symbol to tok
-                states[i][pos] = tok+self.n_vocab # need to verify that this actually modifies states
+                states[i][pos] = tok+self.n_vocab+1 # need to verify that this actually modifies states
         return states
 
     @torch.no_grad()
@@ -417,7 +418,7 @@ class segmenter_controller():
             p = [-1] + nt_positions.cpu().numpy().flatten().tolist()
             spans += [ seq[p[i]+1:p[i+1]] for i in range(len(p) - 1) ]
             # import pdb; pdb.set_trace();
-            tag_seqs.append(seq[nt_positions].flatten() - self.n_vocab)
+            tag_seqs.append(seq[nt_positions].flatten() - self.n_vocab - 1)
 
         x = torch.nn.utils.rnn.pad_sequence(spans, batch_first=True)
         lengths = torch.Tensor(list(map(len, spans))).to(x.device).long()

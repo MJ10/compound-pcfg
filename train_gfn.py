@@ -50,6 +50,9 @@ parser.add_argument('--batch_size', default=4, type=int, help='which gpu to use'
 parser.add_argument('--seed', default=3435, type=int, help='random seed')
 parser.add_argument('--print_every', type=int, default=1000, help='print stats after N batches')
 parser.add_argument('--minimal_dataloader', action="store_true")
+# GFN options
+parser.add_argument('--temperature_pos', default=1., type=float)
+parser.add_argument('--temperature_tok', default=1., type=float)
 
 def main(args):
   np.random.seed(args.seed)
@@ -118,11 +121,11 @@ def main(args):
   gfn_forward_tag.cuda()
   gfn_backward.train()
   gfn_backward.cuda()
-  gfn_optimizer = torch.optim.Adam([{'params':gfn_Z.parameters(), 'lr':args.lr, 'betas':(args.beta1, args.beta2)},
-                                    {'params':gfn_encoder.parameters(), 'lr':args.lr, 'betas':(args.beta1, args.beta2)},
-                                    {'params':gfn_forward_split.parameters(), 'lr':args.lr, 'betas':(args.beta1, args.beta2)},
-                                    {'params':gfn_forward_tag.parameters(), 'lr':args.lr, 'betas':(args.beta1, args.beta2)},
-                                    {'params':gfn_backward.parameters(), 'lr':args.lr, 'betas':(args.beta1, args.beta2)}])
+  gfn_optimizer = torch.optim.Adam([{'params':gfn_Z.parameters(), 'lr':0.1*args.lr, 'betas':(args.beta1, args.beta2)},
+                                    {'params':gfn_encoder.parameters(), 'lr':0.1*args.lr, 'betas':(args.beta1, args.beta2)},
+                                    {'params':gfn_forward_split.parameters(), 'lr':0.1*args.lr, 'betas':(args.beta1, args.beta2)},
+                                    {'params':gfn_forward_tag.parameters(), 'lr':0.1*args.lr, 'betas':(args.beta1, args.beta2)},
+                                    {'params':gfn_backward.parameters(), 'lr':0.1*args.lr, 'betas':(args.beta1, args.beta2)}])
 
   best_val_ppl = 1e5
   best_val_f1 = 0
@@ -342,7 +345,8 @@ def sample_gfn(state, controller, gfn_Z, gfn_encoder, gfn_forward_split, gfn_for
     state, _, B_actions, _logPF = \
                 controller.sample_forward('split',
                                           gfn_forward_split(encoded_sents),
-                                          state)
+                                          state,
+                                          temperature_pos=args.temperature_pos,)
     pad_mask = torch.zeros_like(state).to(torch.float)
     pad_mask[state==pad_sym] = -float('inf')
     encoded_sents = gfn_encoder(state, pad_mask)
@@ -360,7 +364,9 @@ def sample_gfn(state, controller, gfn_Z, gfn_encoder, gfn_forward_split, gfn_for
     state, _, B_actions, _logPF = \
                 controller.sample_forward('tag',
                                           gfn_forward_tag(encoded_sents),
-                                          state)
+                                          state,
+                                          temperature_pos=args.temperature_pos,
+                                          temperature_tok=args.temperature_tok)
     encoded_sents = gfn_encoder(state, pad_mask)
     _logPB = controller.calc_backward_prob(gfn_backward(encoded_sents),
                                           state,
