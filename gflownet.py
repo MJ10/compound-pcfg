@@ -416,7 +416,7 @@ class segmenter_controller():
                 F_actions.append('tag')
                 # return the index of the pos-th split symbol
                 F_positions.append(pos)
-                F_tokens.append(states[i][pos].item()-self.n_vocab)
+                F_tokens.append(states[i][pos].item()-self.n_vocab-1)
         return (F_actions, F_positions, F_tokens)
     
 
