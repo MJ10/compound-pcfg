@@ -53,6 +53,7 @@ parser.add_argument('--minimal_dataloader', action="store_true")
 # GFN options
 parser.add_argument('--temperature_pos', default=1., type=float)
 parser.add_argument('--temperature_tok', default=1., type=float)
+parser.add_argument('--epsilon_sample', default=0., type=float)
 
 def main(args):
   np.random.seed(args.seed)
@@ -165,7 +166,13 @@ def main(args):
       # sample GFlowNet for sequence
       # state = torch.nn.utils.rnn.pad_sequence(sents, batch_first=True, padding_value=vocab_size+args.t_states+args.nt_states)
       state = sents
-      logZ, logPF, logPB, state = sample_gfn(state, controller, gfn_Z, gfn_encoder, gfn_forward_split, gfn_forward_tag, gfn_backward, vocab_size)
+      logZ, logPF, logPB, state = sample_gfn(state, controller,
+                                            gfn_Z, gfn_encoder,
+                                            gfn_forward_split,
+                                            gfn_forward_tag,
+                                            gfn_backward,
+                                            vocab_size,
+                                            epsilon_sample=args.epsilon_sample)
       # print(state[0])
       logR = controller.calc_log_reward(state)
       tb_loss = ((logZ + logPF - logPB - logR.detach()) ** 2).mean()
@@ -307,8 +314,19 @@ def eval(data, data_lens, model, ar_model,
   ar_model.train()
   return ppl_elbo, sent_f1*100 if not args.minimal_dataloader else 0
 
-def sample_gfn(state, controller, gfn_Z, gfn_encoder, gfn_forward_split, gfn_forward_tag, gfn_backward, vocab_size):
+def sample_gfn(state, controller, 
+              gfn_Z, gfn_encoder,
+              gfn_forward_split,
+              gfn_forward_tag,
+              gfn_backward,
+              vocab_size,
+              epsilon_sample=0.):
   pad_sym = vocab_size+args.nt_states+args.t_states+1
+  eff_temp_pos = args.temperature_pos
+  eff_temp_tok = args.temperature_tok
+  if random.random() < epsilon_sample:
+    eff_temp_pos = 100
+    eff_temp_tok = 100
   def done_splitting(state):
     result = []
     for padded_sent in state:
@@ -346,7 +364,7 @@ def sample_gfn(state, controller, gfn_Z, gfn_encoder, gfn_forward_split, gfn_for
                 controller.sample_forward('split',
                                           gfn_forward_split(encoded_sents),
                                           state,
-                                          temperature_pos=args.temperature_pos,)
+                                          temperature_pos=eff_temp_pos,)
     pad_mask = torch.zeros_like(state).to(torch.float)
     pad_mask[state==pad_sym] = -float('inf')
     encoded_sents = gfn_encoder(state, pad_mask)
@@ -365,8 +383,8 @@ def sample_gfn(state, controller, gfn_Z, gfn_encoder, gfn_forward_split, gfn_for
                 controller.sample_forward('tag',
                                           gfn_forward_tag(encoded_sents),
                                           state,
-                                          temperature_pos=args.temperature_pos,
-                                          temperature_tok=args.temperature_tok)
+                                          temperature_pos=eff_temp_pos,
+                                          temperature_tok=eff_temp_tok)
     encoded_sents = gfn_encoder(state, pad_mask)
     _logPB = controller.calc_backward_prob(gfn_backward(encoded_sents),
                                           state,
