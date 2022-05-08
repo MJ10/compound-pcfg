@@ -331,6 +331,9 @@ class segmenter_controller():
                 logB_prob.append(torch.tensor(0., device=self.device))
                 continue
             elif B_actions[0][i] == "merge":
+                if state[state!=self.pad_sym][-1] == self.split_sym:
+                    logB_prob.append(torch.tensor(0., device=self.device))
+                    continue
                 mask = torch.zeros(state.size()).to(self.device)
                 mask[state!=self.split_sym] = -100
             elif B_actions[0][i] == "untag":
