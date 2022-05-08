@@ -327,6 +327,7 @@ def sample_gfn(state, controller,
   if random.random() < epsilon_sample:
     eff_temp_pos = 100
     eff_temp_tok = 100
+    print('random!!')
   def done_splitting(state):
     result = []
     for padded_sent in state:
