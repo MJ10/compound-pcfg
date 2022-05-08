@@ -129,7 +129,7 @@ class CompPCFG(nn.Module):
     nt_emb = nt_emb.unsqueeze(0).expand(batch_size, self.nt_states, self.state_dim)
 
     root_scores = torch.nn.functional.one_hot(tags, self.nt_states).float().clamp(min=1e-32).log()
-    unary_scores = self.vocab_mlp(t_emb).log_softmax(1)
+    unary_scores = self.vocab_mlp(t_emb).log_softmax(3)
     x_expand = x.unsqueeze(2).expand(batch_size, x.size(1), self.t_states).unsqueeze(3)
     unary = unary_scores.gather(3, x_expand).squeeze(3)
 
