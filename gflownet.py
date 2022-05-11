@@ -139,7 +139,6 @@ class segmenter_controller():
         if convert_to_tensor:
             states = torch.nn.utils.rnn.pad_sequence(states, batch_first=True, padding_value=self.pad_sym).long()
         return states, F_actions, B_actions, P_F
-    
 
     def calc_forward_prob(self,
                         F_logits: torch.Tensor,
@@ -186,7 +185,8 @@ class segmenter_controller():
                 logP_tok = F.log_softmax(F_logits[i, F_actions[1][i], 1:], dim=-1)
                 logF_prob.append(logP_pos[F_actions[1][i]]+logP_tok[F_actions[2][i]])
         return torch.stack(logF_prob, dim=0)
-
+    
+    @torch.no_grad()
     def _sample_forward_actions(self,
                                 action : str,
                                 F_logits: torch.Tensor,
@@ -344,6 +344,7 @@ class segmenter_controller():
             logB_prob.append(lpgP_pos[B_actions[1][i]])
         return torch.stack(logB_prob, dim=0)
 
+    @torch.no_grad()
     def _sample_backward_actions(self,
                                 action : str,
                                 B_logits: torch.Tensor,
@@ -431,6 +432,15 @@ class segmenter_controller():
     # removing torch.no_grad here, since we can reuse this function as a loss for training of the PCFG and of the AR model
 
     def calc_log_reward(self, seqs):
+        if seqs.size(1) < 9:
+            return (seqs.new_zeros(seqs.size(0))+1e-8).log()
+        lr = (seqs[:, :9] == torch.tensor([0, 0, 4, 1, 1, 5, 2, 2, 6]).cuda()).all(dim=-1) | \
+             (seqs[:, :9] == torch.tensor([1, 1, 5, 0, 0, 4, 2, 2, 6]).cuda()).all(dim=-1) | \
+             (seqs[:, :9] == torch.tensor([0, 0, 4, 2, 2, 6, 1, 1, 5]).cuda()).all(dim=-1) | \
+             (seqs[:, :9] == torch.tensor([1, 1, 5, 2, 2, 6, 0, 0, 4]).cuda()).all(dim=-1) | \
+             (seqs[:, :9] == torch.tensor([2, 2, 6, 1, 1, 5, 0, 0, 4]).cuda()).all(dim=-1) | \
+             (seqs[:, :9] == torch.tensor([2, 2, 6, 0, 0, 4, 1, 1, 5]).cuda()).all(dim=-1)
+        return (lr.float()+1e-8).log()
         spans = []
         tag_seqs = []
         seqs = [sent[sent!=self.pad_sym] for sent in seqs]

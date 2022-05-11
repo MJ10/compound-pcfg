@@ -178,12 +178,11 @@ def main(args):
       # print(state[0])
       logR = controller.calc_log_reward(state)
       tb_loss = ((logZ + logPF - logPB - logR.detach()) ** 2).mean()
-
       gfn_optimizer.zero_grad()
       tb_loss.backward(retain_graph=True)
       gfn_optimizer.step()
 
-      if update_next:
+      if False: #update_next:
         optimizer.zero_grad()
         (-logR.sum()).backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)    
