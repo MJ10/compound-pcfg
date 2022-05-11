@@ -54,6 +54,7 @@ parser.add_argument('--minimal_dataloader', action="store_true")
 parser.add_argument('--temperature_pos', default=1., type=float)
 parser.add_argument('--temperature_tok', default=1., type=float)
 parser.add_argument('--epsilon_sample', default=0., type=float)
+parser.add_argument('--tb_threshold', default=999., type=float)
 
 def main(args):
   np.random.seed(args.seed)
@@ -96,7 +97,7 @@ def main(args):
                      hidden_dim = 128)
   gfn_Z = GFlowNet_Z(args.state_dim)
   gfn_emb = GFlowNet_shared_embedding(vocab_size+1, args.state_dim, 60, args.nt_states + args.t_states+1)
-  gfn_encoder = GFlowNet_encoder(args.state_dim, 4, 4*args.state_dim, 0.1, True, 4, shared_embedding=gfn_emb)
+  gfn_encoder = GFlowNet_encoder(args.state_dim, 4, 4*args.state_dim, 0.0, True, 4, shared_embedding=gfn_emb)
   gfn_forward_split = GFlowNet_forward_split(args.state_dim)
   gfn_forward_tag = GFlowNet_forward_tag(args.nt_states, args.state_dim)
   gfn_backward = GFlowNet_backward(args.state_dim)
@@ -144,6 +145,7 @@ def main(args):
     num_words = 0.
     all_stats = [[0., 0., 0.]]
     b = 0
+    update_next = False
     for i in np.random.permutation(len(train_data)):
       b += 1
       if args.minimal_dataloader:
@@ -181,10 +183,16 @@ def main(args):
       tb_loss.backward(retain_graph=True)
       gfn_optimizer.step()
 
-      optimizer.zero_grad()
-      (-logR.sum()).backward()
-      torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)    
-      optimizer.step()
+      if update_next:
+        optimizer.zero_grad()
+        (-logR.sum()).backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)    
+        optimizer.step()
+      
+      if tb_loss < args.tb_threshold:
+        update_next = True
+      else:
+        update_next = False
 
       train_gfn_tb += tb_loss.item()
       train_gfn_logR += logR.sum().item()
@@ -199,8 +207,8 @@ def main(args):
         # if not args.minimal_dataloader:
         #   all_f1 = get_f1(all_stats)
         param_norm = sum([p.norm()**2 for p in model.parameters()]).item()**0.5
-        gparam_norm = sum([p.grad.norm()**2 for p in model.parameters() 
-                           if p.grad is not None]).item()**0.5
+        gparam_norm = 0#sum([p.grad.norm()**2 for p in model.parameters() 
+                       #    if p.grad is not None]).item()**0.5
 
         log_str = 'Epoch: %d, Batch: %d/%d, |Param|: %.6f, |GParam|: %.2f,  LR: %.4f, ' + \
                   'GFN TB: %.4f, logR: %.4f, logZ: %.4f' + \
@@ -322,12 +330,6 @@ def sample_gfn(state, controller,
               vocab_size,
               epsilon_sample=0.):
   pad_sym = vocab_size+args.nt_states+args.t_states+1
-  eff_temp_pos = args.temperature_pos
-  eff_temp_tok = args.temperature_tok
-  if random.random() < epsilon_sample:
-    eff_temp_pos = 100
-    eff_temp_tok = 100
-    print('random!!')
   def done_splitting(state):
     result = []
     for padded_sent in state:
@@ -361,6 +363,11 @@ def sample_gfn(state, controller,
   # Phase II:
   #  - split the seqs until the last token is a split symbol
   while not all(done_splitting(state)):
+    eff_temp_pos = args.temperature_pos
+    eff_temp_tok = args.temperature_tok
+    if random.random() < epsilon_sample:
+      eff_temp_pos = 100
+      eff_temp_tok = 100
     state, _, B_actions, _logPF = \
                 controller.sample_forward('split',
                                           gfn_forward_split(encoded_sents),
@@ -380,6 +387,11 @@ def sample_gfn(state, controller,
   #  - tag all the split symbols until there are none left
   encoded_sents = gfn_encoder(state, pad_mask)
   while not all(done_tagging(state)):
+    eff_temp_pos = args.temperature_pos
+    eff_temp_tok = args.temperature_tok
+    if random.random() < epsilon_sample:
+      eff_temp_pos = 100
+      eff_temp_tok = 100
     state, _, B_actions, _logPF = \
                 controller.sample_forward('tag',
                                           gfn_forward_tag(encoded_sents),
