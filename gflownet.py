@@ -394,7 +394,7 @@ class segmenter_controller():
                 states[i] = torch.cat([states[i][:pos], states[i][pos+1:]], dim=0)
             elif action == "untag":
                 # change the pos-th symbol to a split symbol
-                states[i][pos] = self.split_sym
+                states[i, pos] = self.split_sym
         return states
 
     @torch.no_grad()

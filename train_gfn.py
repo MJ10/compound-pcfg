@@ -56,6 +56,7 @@ parser.add_argument('--temperature_tok', default=1., type=float)
 parser.add_argument('--epsilon_sample', default=0., type=float)
 parser.add_argument('--tb_threshold', default=999., type=float)
 
+torch.autograd.set_detect_anomaly(False)
 def main(args):
   np.random.seed(args.seed)
   torch.manual_seed(args.seed)
@@ -339,6 +340,17 @@ def sample_gfn(state, controller,
         result.append(False)
     return result
   
+  @torch.no_grad()
+  def terminate_all(states):
+    if type(states) is not list:
+      # convert states to a list and remove padding
+      states = [sent[sent!=controller.pad_sym] for sent in states]
+    for i in range(state.size(0)):
+      pos = (state[i]!=pad_sym).nonzero()[-1]
+      states[i] = torch.cat([states[i][:pos+1], torch.zeros(1).to(controller.device)+controller.split_sym, states[i][pos+1:]], dim=0).long()
+    states = torch.nn.utils.rnn.pad_sequence(states, batch_first=True, padding_value=controller.pad_sym).long()
+    return states
+  
   def done_tagging(state):
     result = []
     for padded_sent in state:
@@ -362,12 +374,19 @@ def sample_gfn(state, controller,
   logZ = gfn_Z(encoded_sents, pad_mask)
   # Phase II:
   #  - split the seqs until the last token is a split symbol
+  num_cuts = 0
   while not all(done_splitting(state)):
     eff_temp_pos = args.temperature_pos
     eff_temp_tok = args.temperature_tok
     if random.random() < epsilon_sample:
       eff_temp_pos = 100
       eff_temp_tok = 100
+    if num_cuts > 1:
+      state = terminate_all(state)
+      assert all(done_splitting(state))
+      pad_mask = torch.zeros_like(state).to(torch.float)
+      pad_mask[state==pad_sym] = -float('inf')
+      break
     state, _, B_actions, _logPF = \
                 controller.sample_forward('split',
                                           gfn_forward_split(encoded_sents),
@@ -383,6 +402,7 @@ def sample_gfn(state, controller,
     # state = new_state
     logPF += _logPF
     logPB += _logPB
+    num_cuts += 1
   # Phase III:
   #  - tag all the split symbols until there are none left
   encoded_sents = gfn_encoder(state, pad_mask)
@@ -402,7 +422,7 @@ def sample_gfn(state, controller,
     _logPB = controller.calc_backward_prob(gfn_backward(encoded_sents),
                                           state,
                                           B_actions)
-    encoded_sents = gfn_encoder(state, pad_mask)
+    #encoded_sents = gfn_encoder(state, pad_mask)
     logPF += _logPF
     logPB += _logPB
   return logZ, logPF, logPB, state
