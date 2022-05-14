@@ -16,6 +16,16 @@ class GFlowNet_Z(nn.Module):
     def __init__(self, d_model):
         nn.Module.__init__(self)
         self.to_flow = nn.Sequential(nn.LayerNorm(d_model), nn.Linear(d_model, d_model), nn.ReLU(), nn.Linear(d_model, 1))
+        self.reset_parameters()
+        
+    def reset_parameters(self):
+        #self.to_flow[0].weight.data[:] = 1
+        #self.to_flow[0].bias.data.zero_()
+        #torch.nn.init.kaiming_normal_(self.to_flow[1].weight)
+        #self.to_flow[1].bias.data.zero_()
+        #torch.nn.init.kaiming_normal_(self.to_flow[3].weight)
+        #self.to_flow[3].bias.data.zero_()
+        pass
 
     def forward(self, x, pad_mask):
         x = self.to_flow(x).squeeze(-1)

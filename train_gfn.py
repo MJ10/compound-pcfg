@@ -124,7 +124,7 @@ def main(args):
   gfn_forward_tag.cuda()
   gfn_backward.train()
   gfn_backward.cuda()
-  gfn_optimizer = torch.optim.Adam([{'params':gfn_Z.parameters(), 'lr':0.1*args.lr, 'betas':(args.beta1, args.beta2)},
+  gfn_optimizer = torch.optim.Adam([{'params':gfn_Z.parameters(), 'lr':args.lr, 'betas':(args.beta1, args.beta2)},
                                     {'params':gfn_encoder.parameters(), 'lr':0.1*args.lr, 'betas':(args.beta1, args.beta2)},
                                     {'params':gfn_forward_split.parameters(), 'lr':0.1*args.lr, 'betas':(args.beta1, args.beta2)},
                                     {'params':gfn_forward_tag.parameters(), 'lr':0.1*args.lr, 'betas':(args.beta1, args.beta2)},
@@ -133,6 +133,7 @@ def main(args):
   best_val_ppl = 1e5
   best_val_f1 = 0
   epoch = 0
+  gfn_loss_rolling = 10000.
   while epoch < args.num_epochs:
     start_time = time.time()
     epoch += 1  
@@ -179,6 +180,7 @@ def main(args):
       # print(state[0])
       logR = controller.calc_log_reward(state)
       tb_loss = ((logZ + logPF - logPB - logR.detach()) ** 2).mean()
+      gfn_loss_rolling = 0.98 * gfn_loss_rolling + 0.02 * tb_loss.item()
 
       gfn_optimizer.zero_grad()
       tb_loss.backward(retain_graph=True)
@@ -189,8 +191,9 @@ def main(args):
         (-logR.sum()).backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)    
         optimizer.step()
+        #gfn_Z.reset_parameters()
       
-      if tb_loss < args.tb_threshold:
+      if gfn_loss_rolling < args.tb_threshold:
         update_next = True
       else:
         update_next = False
@@ -212,11 +215,12 @@ def main(args):
                        #    if p.grad is not None]).item()**0.5
 
         log_str = 'Epoch: %d, Batch: %d/%d, |Param|: %.6f, |GParam|: %.2f,  LR: %.4f, ' + \
-                  'GFN TB: %.4f, logR: %.4f, logZ: %.4f' + \
+                  'GFN TB: %.4f, Smoothed TB: %.4f,  logR: %.4f, logZ: %.4f, ' + \
                   'Throughput: %.2f examples/sec'
         print(log_str %
               (epoch, b, len(train_data), param_norm, gparam_norm, args.lr, 
-              train_gfn_tb / num_sents, train_gfn_logR / num_sents, train_gfn_logZ / num_sents,
+              train_gfn_tb / num_sents, gfn_loss_rolling, 
+              train_gfn_logR / num_sents, train_gfn_logZ / num_sents,
               num_sents / (time.time() - start_time)))
        
         # # print an example parse
@@ -232,7 +236,7 @@ def main(args):
     print('--------------------------------')
     print('Checking validation perf...')    
     # import pdb; pdb.set_trace();
-    val_ppl, val_f1 = eval(val_data, val_lens, model, ar_model, controller, gfn_Z, gfn_encoder, gfn_forward_split, gfn_forward_tag, gfn_backward, vocab_size)
+    val_ppl, val_f1 = eval(val_data, val_lens, model, ar_model, controller, gfn_Z, gfn_encoder, gfn_forward_split, gfn_forward_tag, gfn_backward, vocab_size, corpus)
     print('--------------------------------')
     if val_ppl < best_val_ppl:
       best_val_ppl = val_ppl
@@ -248,12 +252,13 @@ def main(args):
       model.cuda()
 
 def eval(data, data_lens, model, ar_model,
-         controller, gfn_Z, gfn_encoder, gfn_forward_split, gfn_forward_tag, gfn_backward, vocab_size):
+         controller, gfn_Z, gfn_encoder, gfn_forward_split, gfn_forward_tag, gfn_backward, vocab_size, corpus):
   model.eval()
   ar_model.eval()
   num_sents = 0
   num_words = 0
   total_nll = 0.
+  total_gfn_z_nll = 0.
   total_kl = 0.
   corpus_f1 = [0., 0., 0.] 
   sent_f1 = [] 
@@ -281,8 +286,9 @@ def eval(data, data_lens, model, ar_model,
       state=sents
       logZ, logPF, logPB, state = sample_gfn(state, controller, gfn_Z, gfn_encoder, gfn_forward_split, gfn_forward_tag, gfn_backward,vocab_size)
       logR = controller.calc_log_reward(state)
-      print(state[0])
+      print(' '.join([corpus.dict.idx2word[x] if x < len(corpus.dict.idx2word) else str(x) for x in state[0].tolist()]))
       total_nll -= logR.sum().item()
+      total_gfn_z_nll -= logZ.sum().item()
       # if not args.minimal_dataloader:
       #   for b in range(batch_size):
       #     span_b = [(a[0], a[1]) for a in argmax_spans[b]] #ignore labels
@@ -311,11 +317,12 @@ def eval(data, data_lens, model, ar_model,
   #   recall = tp / (tp + fn)
   #   corpus_f1 = 2*prec*recall/(prec+recall) if prec+recall > 0 else 0.
   #   sent_f1 = np.mean(np.array(sent_f1))
+  gfn_z_ppl = np.exp(total_gfn_z_nll / num_words)
   recon_ppl = np.exp(total_nll / num_words)
   ppl_elbo = np.exp((total_nll + total_kl)/num_words) 
   # kl = total_kl /num_sents
-  print('ReconPPL: %.2f, PPL (Upper Bound): %.2f' %
-        (recon_ppl, ppl_elbo))
+  print('ReconPPL: %.2f, PPL (Upper Bound): %.2f, PPL (GFN Z): %.2f' %
+        (recon_ppl, ppl_elbo, gfn_z_ppl))
   # if not args.minimal_dataloader:
   #   print('Corpus F1: %.2f, Sentence F1: %.2f' %
   #         (corpus_f1*100, sent_f1*100))
@@ -381,9 +388,9 @@ def sample_gfn(state, controller,
     if random.random() < epsilon_sample:
       eff_temp_pos = 100
       eff_temp_tok = 100
-    if num_cuts > 1:
+    if num_cuts > 0:
       state = terminate_all(state)
-      assert all(done_splitting(state))
+      #assert all(done_splitting(state))
       pad_mask = torch.zeros_like(state).to(torch.float)
       pad_mask[state==pad_sym] = -float('inf')
       break
