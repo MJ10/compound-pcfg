@@ -444,22 +444,22 @@ class segmenter_controller():
         x = torch.nn.utils.rnn.pad_sequence(spans, batch_first=True)
         lengths = torch.Tensor(list(map(len, spans))).to(x.device).long()
         # import pdb;pdb.set_trace();
-        tree_lls = self.pcfg.batch_marginal_with_roots(x, lengths, torch.cat(tag_seqs, 0))
+        # tree_lls = self.pcfg.batch_marginal_with_roots(x, lengths, torch.cat(tag_seqs, 0))
 
-        pad_value = self.args.nt_states+1
-        start_end = torch.LongTensor([self.args.nt_states]).to(x.device)
-        x_tag = torch.nn.utils.rnn.pad_sequence([torch.cat([start_end,seq,start_end],0) for seq in tag_seqs], batch_first=True, padding_value=pad_value)
-        outs = self.ar_model(x_tag).log_softmax(-1)
-        token_lls = outs[:,:-1].gather(2, x_tag[:,1:].unsqueeze(2)).squeeze(2)
-        ar_lls = (token_lls * (x_tag[:,1:]!=pad_value).float()).sum(1)
+        # pad_value = self.args.nt_states+1
+        # start_end = torch.LongTensor([self.args.nt_states]).to(x.device)
+        # x_tag = torch.nn.utils.rnn.pad_sequence([torch.cat([start_end,seq,start_end],0) for seq in tag_seqs], batch_first=True, padding_value=pad_value)
+        # outs = self.ar_model(x_tag).log_softmax(-1)
+        # token_lls = outs[:,:-1].gather(2, x_tag[:,1:].unsqueeze(2)).squeeze(2)
+        # ar_lls = (token_lls * (x_tag[:,1:]!=pad_value).float()).sum(1)
 
         # print('ts', seqs[0], x_tag[0])
         # import pdb;pdb.set_trace()
 
         lr = torch.zeros((len(seqs),), device=x.device)
         start = 0
-        for i, ar_ll, tag_seq in zip(range(len(seqs)), ar_lls, tag_seqs):
-            lr[i] = ar_ll + tree_lls[start:start+len(tag_seq)].sum()
+        for i, tag_seq in zip(range(len(seqs)), tag_seqs):
+            lr[i] = lengths[start:start+len(tag_seq)].float().std()
             start += len(tag_seq)
-
-        return lr
+        # import pdb; pdb.set_trace();
+        return -torch.abs(torch.nan_to_num(lr)) # stdev for a single number returns nan so set it to 0.
