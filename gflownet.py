@@ -469,7 +469,8 @@ class segmenter_controller():
         lr = torch.zeros((len(seqs),), device=x.device)
         start = 0
         for i, ar_ll, tag_seq in zip(range(len(seqs)), ar_lls, tag_seqs):
-            lr[i] = ar_ll + tree_lls[start:start+len(tag_seq)].sum()
+            #lr[i] = ar_ll + tree_lls[start:start+len(tag_seq)].sum()
+            lr[i] = tree_lls[start:start+len(tag_seq)].sum()
             start += len(tag_seq)
 
         return lr

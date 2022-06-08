@@ -26,6 +26,7 @@ parser.add_argument('--train_file', default='data/ptb-train.pkl')
 parser.add_argument('--val_file', default='data/ptb-val.pkl')
 parser.add_argument('--data', default='data/pcfg_1')
 parser.add_argument('--save_path', default='compound-pcfg.pt', help='where to save the model')
+parser.add_argument('--load_model', default=None, help='where to save the model')
 
 # Model options
 # Generative model parameters
@@ -93,15 +94,19 @@ def main(args):
                    h_dim = args.h_dim,
                    w_dim = args.w_dim,
                    z_dim = args.z_dim)
+  if args.load_model is not None:
+    checkpoint = torch.load(args.load_model)
+    model = checkpoint['model'].cuda()
+    import pdb; pdb.set_trace()
   ar_model = ARModel(V = args.nt_states + 2,
                      num_layers = 2,
                      hidden_dim = 128)
-  gfn_Z = GFlowNet_Z(args.state_dim)
-  gfn_emb = GFlowNet_shared_embedding(vocab_size+1, args.state_dim, 60, args.nt_states + args.t_states+1)
-  gfn_encoder = GFlowNet_encoder(args.state_dim, 4, 4*args.state_dim, 0.0, True, 4, shared_embedding=gfn_emb)
-  gfn_forward_split = GFlowNet_forward_split(args.state_dim)
-  gfn_forward_tag = GFlowNet_forward_tag(args.nt_states, args.state_dim)
-  gfn_backward = GFlowNet_backward(args.state_dim)
+  gfn_Z = GFlowNet_Z(2*args.state_dim)
+  gfn_emb = GFlowNet_shared_embedding(vocab_size+1, 2*args.state_dim, 60, args.nt_states + args.t_states+1)
+  gfn_encoder = GFlowNet_encoder(2*args.state_dim, 4, 2*4*args.state_dim, 0.0, True, 4, shared_embedding=gfn_emb)
+  gfn_forward_split = GFlowNet_forward_split(2*args.state_dim)
+  gfn_forward_tag = GFlowNet_forward_tag(args.nt_states, 2*args.state_dim)
+  gfn_backward = GFlowNet_backward(2*args.state_dim)
   controller = segmenter_controller(device, args, vocab_size, model, ar_model)
   for name, param in model.named_parameters():    
     if param.dim() > 1:
@@ -125,15 +130,16 @@ def main(args):
   gfn_backward.train()
   gfn_backward.cuda()
   gfn_optimizer = torch.optim.Adam([{'params':gfn_Z.parameters(), 'lr':args.lr, 'betas':(args.beta1, args.beta2)},
-                                    {'params':gfn_encoder.parameters(), 'lr':0.1*args.lr, 'betas':(args.beta1, args.beta2)},
-                                    {'params':gfn_forward_split.parameters(), 'lr':0.1*args.lr, 'betas':(args.beta1, args.beta2)},
-                                    {'params':gfn_forward_tag.parameters(), 'lr':0.1*args.lr, 'betas':(args.beta1, args.beta2)},
-                                    {'params':gfn_backward.parameters(), 'lr':0.1*args.lr, 'betas':(args.beta1, args.beta2)}])
+                                    {'params':gfn_encoder.parameters(), 'lr':0.01*args.lr, 'betas':(args.beta1, args.beta2)},
+                                    {'params':gfn_forward_split.parameters(), 'lr':0.01*args.lr, 'betas':(args.beta1, args.beta2)},
+                                    {'params':gfn_forward_tag.parameters(), 'lr':0.01*args.lr, 'betas':(args.beta1, args.beta2)},
+                                    {'params':gfn_backward.parameters(), 'lr':0.01*args.lr, 'betas':(args.beta1, args.beta2)}])
 
   best_val_ppl = 1e5
   best_val_f1 = 0
   epoch = 0
   gfn_loss_rolling = 10000.
+
   while epoch < args.num_epochs:
     start_time = time.time()
     epoch += 1  
@@ -217,6 +223,7 @@ def main(args):
         log_str = 'Epoch: %d, Batch: %d/%d, |Param|: %.6f, |GParam|: %.2f,  LR: %.4f, ' + \
                   'GFN TB: %.4f, Smoothed TB: %.4f,  logR: %.4f, logZ: %.4f, ' + \
                   'Throughput: %.2f examples/sec'
+        print(f'GFN Z: {logZ[0].item():.4f}, PF: {logPF[0].item():.4f}, PB: {logPB[0].item():.4f}, R: {logR[0].item():.4f}')
         print(log_str %
               (epoch, b, len(train_data), param_norm, gparam_norm, args.lr, 
               train_gfn_tb / num_sents, gfn_loss_rolling, 
@@ -388,7 +395,7 @@ def sample_gfn(state, controller,
     if random.random() < epsilon_sample:
       eff_temp_pos = 100
       eff_temp_tok = 100
-    if num_cuts > 0:
+    if num_cuts > 2:
       state = terminate_all(state)
       #assert all(done_splitting(state))
       pad_mask = torch.zeros_like(state).to(torch.float)
@@ -410,6 +417,7 @@ def sample_gfn(state, controller,
     logPF += _logPF
     logPB += _logPB
     num_cuts += 1
+    #assert (logPB == 0).all()
   # Phase III:
   #  - tag all the split symbols until there are none left
   encoded_sents = gfn_encoder(state, pad_mask)
