@@ -13,7 +13,7 @@ from torch import cuda
 import numpy as np
 import time
 import logging
-from data import Dataset, MinimalDataset
+from data import Dataset, MinimalDataset, HFTokenizedDataset
 from utils import *
 from models import CompPCFG, ARModel
 from torch.nn.init import xavier_uniform_
@@ -50,7 +50,7 @@ parser.add_argument('--gpu', default=0, type=int, help='which gpu to use')
 parser.add_argument('--batch_size', default=4, type=int, help='which gpu to use')
 parser.add_argument('--seed', default=3435, type=int, help='random seed')
 parser.add_argument('--print_every', type=int, default=1000, help='print stats after N batches')
-parser.add_argument('--minimal_dataloader', action="store_true")
+parser.add_argument('--dataloader', type=str, default='minimal', help='minimal or tokenized')
 # GFN options
 parser.add_argument('--temperature_pos', default=1., type=float)
 parser.add_argument('--temperature_tok', default=1., type=float)
@@ -61,7 +61,7 @@ torch.autograd.set_detect_anomaly(False)
 def main(args):
   np.random.seed(args.seed)
   torch.manual_seed(args.seed)
-  if args.minimal_dataloader:
+  if args.dataloader == 'minimal':
     corpus = MinimalDataset(args.data, args.max_length, batch_size=args.batch_size,
                               batch_group_size=999999, add_master_token=False, pad_value=args.t_states+args.nt_states)
     train_data = corpus.train
@@ -71,6 +71,20 @@ def main(args):
     val_data = corpus.valid
     val_lens = corpus.valid_lens
     vocab_size = len(corpus.dict.idx2word)
+    print(vocab_size)
+    max_len = train_data.shape[1]
+    print('Train: %d sents / %d batches, Val: %d sents / %d batches' % 
+        (train_data.size(0), len(train_data), val_data.size(0), len(val_data)))
+  elif args.dataloader == 'roberta':
+    corpus = HFTokenizedDataset(args.data, tokenizer, args.max_length, batch_size=args.batch_size,
+                              batch_group_size=999999, pad_value=1)
+    train_data = corpus.train
+    train_lens = corpus.train_lens
+    #print(train_data[0])
+    #import pdb;pdb.set_trace();
+    val_data = corpus.valid
+    val_lens = corpus.valid_lens
+    vocab_size = len(tokenizer)
     print(vocab_size)
     max_len = train_data.shape[1]
     print('Train: %d sents / %d batches, Val: %d sents / %d batches' % 
@@ -101,12 +115,12 @@ def main(args):
   ar_model = ARModel(V = args.nt_states + 2,
                      num_layers = 2,
                      hidden_dim = 128)
-  gfn_Z = GFlowNet_Z(2*args.state_dim)
-  gfn_emb = GFlowNet_shared_embedding(vocab_size+1, 2*args.state_dim, 60, args.nt_states + args.t_states+1)
-  gfn_encoder = GFlowNet_encoder(2*args.state_dim, 4, 2*4*args.state_dim, 0.0, True, 4, shared_embedding=gfn_emb)
-  gfn_forward_split = GFlowNet_forward_split(2*args.state_dim)
-  gfn_forward_tag = GFlowNet_forward_tag(args.nt_states, 2*args.state_dim)
-  gfn_backward = GFlowNet_backward(2*args.state_dim)
+  gfn_Z = GFlowNet_Z(args.state_dim)
+  gfn_emb = GFlowNet_shared_embedding(vocab_size+1, args.state_dim, 60, args.nt_states + args.t_states+1)
+  gfn_encoder = GFlowNet_encoder(args.state_dim, 4, 4*args.state_dim, 0.0, True, 4, shared_embedding=gfn_emb)
+  gfn_forward_split = GFlowNet_forward_split(args.state_dim)
+  gfn_forward_tag = GFlowNet_forward_tag(args.nt_states, args.state_dim)
+  gfn_backward = GFlowNet_backward(args.state_dim)
   controller = segmenter_controller(device, args, vocab_size, model, ar_model)
   for name, param in model.named_parameters():    
     if param.dim() > 1:
@@ -130,7 +144,7 @@ def main(args):
   gfn_backward.train()
   gfn_backward.cuda()
   gfn_optimizer = torch.optim.Adam([{'params':gfn_Z.parameters(), 'lr':args.lr, 'betas':(args.beta1, args.beta2)},
-                                    {'params':gfn_encoder.parameters(), 'lr':0.01*args.lr, 'betas':(args.beta1, args.beta2)},
+                                    {'params':rbt_model.parameters(), 'lr':0.01*args.lr, 'betas':(args.beta1, args.beta2)},
                                     {'params':gfn_forward_split.parameters(), 'lr':0.01*args.lr, 'betas':(args.beta1, args.beta2)},
                                     {'params':gfn_forward_tag.parameters(), 'lr':0.01*args.lr, 'betas':(args.beta1, args.beta2)},
                                     {'params':gfn_backward.parameters(), 'lr':0.01*args.lr, 'betas':(args.beta1, args.beta2)}])
@@ -156,17 +170,14 @@ def main(args):
     update_next = False
     for i in np.random.permutation(len(train_data)):
       b += 1
-      if args.minimal_dataloader:
+      if args.dataloader != 'default':
         sents = train_data[i]
         lengths = train_lens[i]
         batch_size = args.batch_size
-
       else:
         sents, length, batch_size, _, gold_spans, gold_binary_trees, _ = train_data[i]      
-        
         if length > args.max_length or length == 1: #length filter based on curriculum 
           continue
-
         lengths = [length]*batch_size
 
       sents = sents.cuda()
@@ -177,7 +188,7 @@ def main(args):
       # state = torch.nn.utils.rnn.pad_sequence(sents, batch_first=True, padding_value=vocab_size+args.t_states+args.nt_states)
       state = sents
       logZ, logPF, logPB, state = sample_gfn(state, controller,
-                                            gfn_Z, gfn_encoder,
+                                            gfn_Z, rbt_model,
                                             gfn_forward_split,
                                             gfn_forward_tag,
                                             gfn_backward,
@@ -251,8 +262,6 @@ def main(args):
       checkpoint = {
         'args': args.__dict__,
         'model': model.cpu(),
-        'word2idx': corpus.dict.word2idx,
-        'idx2word': corpus.dict.idx2word
       }
       print('Saving checkpoint to %s' % args.save_path)
       torch.save(checkpoint, args.save_path)
@@ -271,7 +280,7 @@ def eval(data, data_lens, model, ar_model,
   sent_f1 = [] 
   with torch.no_grad():
     for i in range(len(data)):
-      if args.minimal_dataloader:
+      if args.dataloader != 'default':
         sents = data[i]
         lengths = data_lens[i]
         batch_size = args.batch_size
@@ -282,6 +291,7 @@ def eval(data, data_lens, model, ar_model,
           continue
         lengths = [lengths] * batch_size
       
+      sents = sents.cuda()
       # note that for unsuperised parsing, we should do model(sents, argmax=True, use_mean = True)
       # but we don't for eval since we want a valid upper bound on PPL for early stopping
       # see eval.py for proper MAP inference
@@ -291,9 +301,9 @@ def eval(data, data_lens, model, ar_model,
       # state = torch.nn.utils.rnn.pad_sequence(sents, batch_first=True, padding_value=vocab_size+args.t_states+args.nt_states)
       # sample GFlowNet for sequence
       state=sents
-      logZ, logPF, logPB, state = sample_gfn(state, controller, gfn_Z, gfn_encoder, gfn_forward_split, gfn_forward_tag, gfn_backward,vocab_size)
+      logZ, logPF, logPB, state = sample_gfn(state, controller, gfn_Z, rbt_model, gfn_forward_split, gfn_forward_tag, gfn_backward,vocab_size)
       logR = controller.calc_log_reward(state)
-      print(' '.join([corpus.dict.idx2word[x] if x < len(corpus.dict.idx2word) else str(x) for x in state[0].tolist()]))
+      #print(' '.join([corpus.dict.idx2word[x] if x < len(corpus.dict.idx2word) else str(x) for x in state[0].tolist()]))
       total_nll -= logR.sum().item()
       total_gfn_z_nll -= logZ.sum().item()
       # if not args.minimal_dataloader:
@@ -335,7 +345,7 @@ def eval(data, data_lens, model, ar_model,
   #         (corpus_f1*100, sent_f1*100))
   model.train()
   ar_model.train()
-  return ppl_elbo, sent_f1*100 if not args.minimal_dataloader else 0
+  return ppl_elbo, sent_f1*100 if args.dataloader == 'default' else 0
 
 def sample_gfn(state, controller, 
               gfn_Z, gfn_encoder,
@@ -344,11 +354,11 @@ def sample_gfn(state, controller,
               gfn_backward,
               vocab_size,
               epsilon_sample=0.):
-  pad_sym = vocab_size+args.nt_states+args.t_states+1
+  pad_sym = 1
   def done_splitting(state):
     result = []
     for padded_sent in state:
-      if padded_sent[padded_sent!=pad_sym][-1] == vocab_size:
+      if padded_sent[padded_sent!=pad_sym][-1] == 2:
         result.append(True)
       else:
         result.append(False)
@@ -360,22 +370,26 @@ def sample_gfn(state, controller,
       # convert states to a list and remove padding
       states = [sent[sent!=controller.pad_sym] for sent in states]
     for i in range(state.size(0)):
+      if state[i][state[i]!=pad_sym][-1] == 2:
+        #state[i][state[i]!=pad_sym][-1] = vocab_size + 1
+        continue
       pos = (state[i]!=pad_sym).nonzero()[-1]
       states[i] = torch.cat([states[i][:pos+1], torch.zeros(1).to(controller.device)+controller.split_sym, states[i][pos+1:]], dim=0).long()
+      #states[i] = torch.cat([states[i][:pos+1], torch.zeros(1).to(controller.device)+vocab_size + 1, states[i][pos+1:]], dim=0).long()
     states = torch.nn.utils.rnn.pad_sequence(states, batch_first=True, padding_value=controller.pad_sym).long()
     return states
   
   def done_tagging(state):
     result = []
     for padded_sent in state:
-      if padded_sent[padded_sent==vocab_size].sum() == 0:
+      if padded_sent[padded_sent==2].sum() == 0:
         result.append(True)
       else:
         result.append(False)
     return result
   
-  pad_mask = torch.zeros_like(state).to(torch.float)
-  pad_mask[state==pad_sym] = -float('inf')
+  pad_mask = torch.ones_like(state).to(torch.float)
+  pad_mask[state==pad_sym] = 0
   logPF = torch.zeros(state.shape[0], device=device)
   logPB = torch.zeros(state.shape[0], device=device)
   # Phase I:
@@ -385,7 +399,7 @@ def sample_gfn(state, controller,
   except Exception as e:
     import pdb; pdb.set_trace();
     encoded_sents = gfn_encoder(state, pad_mask)
-  logZ = gfn_Z(encoded_sents, pad_mask)
+  logZ = gfn_Z(encoded_sents.pooler_output, pad_mask)
   # Phase II:
   #  - split the seqs until the last token is a split symbol
   num_cuts = 0
@@ -395,21 +409,21 @@ def sample_gfn(state, controller,
     if random.random() < epsilon_sample:
       eff_temp_pos = 100
       eff_temp_tok = 100
-    if num_cuts > 2:
+    if num_cuts > 3:
       state = terminate_all(state)
       #assert all(done_splitting(state))
-      pad_mask = torch.zeros_like(state).to(torch.float)
-      pad_mask[state==pad_sym] = -float('inf')
+      pad_mask = torch.ones_like(state).to(torch.float)
+      pad_mask[state==pad_sym] = 0
       break
     state, _, B_actions, _logPF = \
                 controller.sample_forward('split',
-                                          gfn_forward_split(encoded_sents),
+                                          gfn_forward_split(encoded_sents.last_hidden_state),
                                           state,
                                           temperature_pos=eff_temp_pos,)
-    pad_mask = torch.zeros_like(state).to(torch.float)
-    pad_mask[state==pad_sym] = -float('inf')
+    pad_mask = torch.ones_like(state).to(torch.float)
+    pad_mask[state==pad_sym] = 0
     encoded_sents = gfn_encoder(state, pad_mask)
-    _logPB = controller.calc_backward_prob(gfn_backward(encoded_sents),
+    _logPB = controller.calc_backward_prob(gfn_backward(encoded_sents.last_hidden_state),
                                           state,
                                           B_actions)
     # encoded_sents = gfn_encoder(state, pad_mask)
@@ -429,12 +443,12 @@ def sample_gfn(state, controller,
       eff_temp_tok = 100
     state, _, B_actions, _logPF = \
                 controller.sample_forward('tag',
-                                          gfn_forward_tag(encoded_sents),
+                                          gfn_forward_tag(encoded_sents.last_hidden_state),
                                           state,
                                           temperature_pos=eff_temp_pos,
                                           temperature_tok=eff_temp_tok)
     encoded_sents = gfn_encoder(state, pad_mask)
-    _logPB = controller.calc_backward_prob(gfn_backward(encoded_sents),
+    _logPB = controller.calc_backward_prob(gfn_backward(encoded_sents.last_hidden_state),
                                           state,
                                           B_actions)
     #encoded_sents = gfn_encoder(state, pad_mask)
@@ -444,5 +458,12 @@ def sample_gfn(state, controller,
 
 if __name__ == '__main__':
   args = parser.parse_args()
+
+  from transformers import RobertaTokenizer, RobertaModel
+  tokenizer = RobertaTokenizer.from_pretrained('roberta-base')
+  rbt_model = RobertaModel.from_pretrained('roberta-base').cuda()
+  rbt_model.resize_token_embeddings(len(tokenizer)+args.t_states+args.nt_states)
+  #output = model(**encoded_input)
+
   device = torch.device(f'cuda:{args.gpu}')
   main(args)

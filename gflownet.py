@@ -1,3 +1,4 @@
+from regex import X
 import torch.nn as nn
 import torch
 import torch.nn.functional as F
@@ -29,9 +30,7 @@ class GFlowNet_Z(nn.Module):
 
     def forward(self, x, pad_mask):
         x = self.to_flow(x).squeeze(-1)
-        masked_x = (x.view(-1) * pad_mask.exp().view(-1)).view(x.size())
-        pooled_x = masked_x.sum(1) #/ pad_mask.exp().sum(dim=-1).view(-1)
-        return pooled_x
+        return x
 
 class GFlowNet_shared_embedding(nn.Module):
     def __init__(self, n_vocab, d_model, seqlen=128, n_nts=0):
@@ -122,11 +121,11 @@ class segmenter_controller():
         self.n_vocab = n_vocab
         self.pcfg = pcfg
         self.ar_model = ar_model
-        self.split_sym = n_vocab
+        self.split_sym = 2
         if type(args) is dict:
-            self.pad_sym = n_vocab + args['t_states'] + args['nt_states'] + 1
+            self.pad_sym = 1 #n_vocab + args['t_states'] + args['nt_states'] + 1
         else:
-            self.pad_sym = n_vocab + args.t_states + args.nt_states + 1
+            self.pad_sym = 1 #n_vocab + args.t_states + args.nt_states + 1
 
     def sample_forward(self,
                     action : str,

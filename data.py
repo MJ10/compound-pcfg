@@ -23,7 +23,91 @@ class Dictionary(object):
 # [corpus.dictionary.idx2word[idx] for idx in data[:40].tolist()]
 from collections import defaultdict
 
+class HFTokenizedDataset(object):
+  def __init__(self, path, HF_tokenizer, seqlen=-1, batch_size=1, batch_group_size=100, device='cuda', pad_value=0):
+    self.train = None
+    self.valid = None
+    self.test = None
+    self.device = device
+    self.seqlen = seqlen
+    self.batch_size = batch_size
+    self.batch_group_size = batch_group_size
+    self.pad_value = pad_value
+    self.HF_tokenizer = HF_tokenizer
+    if not self.load_cache(path):
+      self.train, self.train_lens = self.tokenize(os.path.join(path, 'train'))
+      self.valid, self.valid_lens = self.tokenize(os.path.join(path, 'valid'))
+      self.test, self.test_lens = self.tokenize(os.path.join(path, 'test'))
+      self.train = torch.nn.utils.rnn.pad_sequence(self.train, batch_first=True, padding_value=self.pad_value)
+      self.valid = torch.nn.utils.rnn.pad_sequence(self.valid, batch_first=True, padding_value=self.pad_value)
+      self.test = torch.nn.utils.rnn.pad_sequence(self.test, batch_first=True, padding_value=self.pad_value)
+      self.save_cache(path)
+    for loader in ['train', 'valid', 'test']:
+      tmp_copy = getattr(self, loader)
+      tmp_copy = tmp_copy[:tmp_copy.size(0)//self.batch_size*self.batch_size]
+      setattr(self, loader, tmp_copy.reshape(tmp_copy.size(0) // self.batch_size, self.batch_size, tmp_copy.size(-1)))
 
+      tmp_copy = getattr(self, loader+"_lens")
+      tmp_copy = tmp_copy[:tmp_copy.size(0)//self.batch_size*self.batch_size]
+      setattr(self, loader + "_lens", tmp_copy.reshape(tmp_copy.size(0) // self.batch_size, self.batch_size))
+    # import pdb; pdb.set_trace();
+
+  def sort_n_shuffle(self, dataloader):
+    dataloader = sorted(dataloader, key=lambda x:len(x))
+    groups = []
+    for i, sample in enumerate(dataloader, 0):
+      if i % (self.batch_size * self.batch_group_size) == 0:
+        groups.append([])
+      groups[-1].append(sample)
+    for group in groups:
+      random.shuffle(group)
+    dataloader = [ele for group in groups for ele in group]
+    lens = [len(ele) for group in groups for ele in group]
+    return dataloader, lens
+    
+  def load_cache(self, path):
+    suffix = f'.{self.seqlen}' if self.seqlen > 0 else ''
+    suffix += '.no_MT'
+    for cache in ['train.pt', 'valid.pt', 'test.pt']:
+      cache_path = os.path.join(path, cache+suffix)
+      if not os.path.exists(cache_path):
+        return False
+    self.train = torch.load(os.path.join(path, f'train.pt{suffix}'))
+    self.train_lens = torch.load(os.path.join(path, f'train_lens.pt{suffix}'))
+    self.valid = torch.load(os.path.join(path, f'valid.pt{suffix}'))
+    self.valid_lens = torch.load(os.path.join(path, f'valid_lens.pt{suffix}'))
+    self.test = torch.load(os.path.join(path, f'test.pt{suffix}'))
+    self.test_lens = torch.load(os.path.join(path, f'test_lens.pt{suffix}'))
+    return True
+
+  def save_cache(self, path):
+    suffix = f'.{self.seqlen}' if self.seqlen > 0 else ''
+    suffix += '.no_MT'
+    torch.save(self.train, os.path.join(path, f'train.pt{suffix}'))
+    torch.save(self.train_lens, os.path.join(path, f'train_lens.pt{suffix}'))
+    torch.save(self.valid, os.path.join(path, f'valid.pt{suffix}'))
+    torch.save(self.valid_lens, os.path.join(path, f'valid_lens.pt{suffix}'))
+    torch.save(self.test, os.path.join(path, f'test.pt{suffix}'))        
+    torch.save(self.test_lens, os.path.join(path, f'test_lens.pt{suffix}'))        
+
+  def tokenize(self, path):
+    """Tokenizes a text file."""
+    src_path = path + '.src'
+    assert os.path.exists(src_path)
+    with open(src_path, 'r', encoding="utf8") as src_f:
+      src_idss = []
+      for src_line in src_f:
+        src_line = src_line.strip('\n')
+        src_words = src_line.split()
+        if self.seqlen > 0 and (len(src_words) > self.seqlen):
+          continue
+        src_ids = self.HF_tokenizer(src_line, return_tensors='pt',
+                                    add_special_tokens=True)['input_ids'][0]
+        src_ids[src_ids==2] = 1
+        src_idss.append(src_ids)
+    src_idss, lengths = self.sort_n_shuffle(src_idss)
+    lengths = torch.tensor(lengths)
+    return src_idss, lengths
 
 class MinimalDataset(object):
   def __init__(self, path, seqlen=-1, batch_size=1, batch_group_size=100, add_master_token=False, device='cuda', pad_value=0):
