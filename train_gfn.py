@@ -56,6 +56,11 @@ parser.add_argument('--temperature_pos', default=1., type=float)
 parser.add_argument('--temperature_tok', default=1., type=float)
 parser.add_argument('--epsilon_sample', default=0., type=float)
 parser.add_argument('--tb_threshold', default=999., type=float)
+# AR model
+parser.add_argument('--ar_layers', default=2, type=int)
+parser.add_argument('--ar_dim', default=128, type=int)
+parser.add_argument('--ar_type', default='lstm')
+parser.add_argument('--ar_ngram_n', default=-1, type=int)
 
 def main(args):
   np.random.seed(args.seed)
@@ -99,8 +104,10 @@ def main(args):
                     w_dim = args.w_dim,
                     z_dim = args.z_dim)
   ar_model = ARModel(V = args.nt_states + 2,
-                     num_layers = 2,
-                     hidden_dim = 128)
+                     num_layers = args.ar_layers,
+                     hidden_dim = args.ar_dim,
+                     type=args.ar_type,
+                     n=args.ar_ngram_n)
   gfn_Z = GFlowNet_Z(args.state_dim)
   gfn_emb = GFlowNet_shared_embedding(vocab_size, args.state_dim, 60, args.nt_states + args.t_states+1)
   gfn_encoder = GFlowNet_encoder(args.state_dim, 4, 4*args.state_dim, 0.0, True, 4, shared_embedding=gfn_emb)

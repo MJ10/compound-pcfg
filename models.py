@@ -142,14 +142,38 @@ class CompPCFG(nn.Module):
     return log_Z
 
 class ARModel(nn.Module):
-  def __init__(self, V, num_layers, hidden_dim):
+  def __init__(self, V, num_layers, hidden_dim, type, n=-1):
     super(ARModel, self).__init__()
 
+    self.type = type
+
     self.embedding = nn.Embedding(V, hidden_dim)
-    self.lstm = nn.LSTM(input_size=hidden_dim, hidden_size=hidden_dim, num_layers=num_layers, batch_first=True)
+
+    if self.type == 'lstm':
+      self.lstm = nn.LSTM(input_size=hidden_dim, hidden_size=hidden_dim, num_layers=num_layers, batch_first=True)
+    elif self.type == 'ngram':
+      self.n = n
+      sizes = [ (n-1)*hidden_dim ] + [ hidden_dim ] * num_layers
+      layers = []
+      for s1,s2 in zip(sizes[:-1], sizes[1:]): 
+        layers += [ torch.nn.Linear(s1, s2), torch.nn.LeakyReLU() ]
+      self.model = nn.Sequential(*layers[:-1])
+    else:
+      raise Exception('Unknown model type.')
+  
     self.unembedding = nn.Linear(hidden_dim, V)
 
   def forward(self,x):
     x = self.embedding(x)
-    x, _ = self.lstm(x)
+    if self.type == 'lstm':
+      x, _ = self.lstm(x)
+    elif self.type == 'ngram':
+      # pad x on left to have at least n-1 copies of start symbol
+      x = torch.cat([ x[:,:1].repeat(1,self.n-2,1), x ], 1)
+
+      # stack n-1 copies of x and reshape
+      x = torch.stack( [ x[:, k:x.shape[1]-self.n+k+2] for k in range(self.n-1) ], 2)
+      x = x.view(x.shape[:2] + (-1,))
+
+      x = self.model(x)
     return self.unembedding(x)
