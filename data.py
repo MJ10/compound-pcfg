@@ -41,9 +41,9 @@ class MinimalDataset(object):
       self.train, self.train_lens = self.tokenize(os.path.join(path, 'train'))
       self.valid, self.valid_lens = self.tokenize(os.path.join(path, 'valid'))
       self.test, self.test_lens = self.tokenize(os.path.join(path, 'test'))
-      self.train = torch.nn.utils.rnn.pad_sequence(self.train, batch_first=True, padding_value=self.pad_value + len(self.dict.idx2word)+1)
-      self.valid = torch.nn.utils.rnn.pad_sequence(self.valid, batch_first=True, padding_value=self.pad_value + len(self.dict.idx2word)+1)
-      self.test = torch.nn.utils.rnn.pad_sequence(self.test, batch_first=True, padding_value=self.pad_value + len(self.dict.idx2word)+1)
+      # self.train = torch.nn.utils.rnn.pad_sequence(self.train, batch_first=True, padding_value=self.pad_value + len(self.dict.idx2word)+1)
+      # self.valid = torch.nn.utils.rnn.pad_sequence(self.valid, batch_first=True, padding_value=self.pad_value + len(self.dict.idx2word)+1)
+      # self.test = torch.nn.utils.rnn.pad_sequence(self.test, batch_first=True, padding_value=self.pad_value + len(self.dict.idx2word)+1)
       self.save_cache(path)
     for loader in ['train', 'valid', 'test']:
       tmp_copy = getattr(self, loader)
@@ -101,6 +101,7 @@ class MinimalDataset(object):
     trees_path = path + '-trees.pkl'
     assert os.path.exists(src_path)
     # Add words to the dictionary
+    self.dict.add_word("<PAD>")
     with open(src_path, 'r', encoding="utf8") as src_f:
       src_idss = []
       for src_line in src_f:
@@ -116,8 +117,8 @@ class MinimalDataset(object):
           src_ids.append(self.dict.word2idx[word])
         src_idss.append(torch.tensor(src_ids, device=self.device).type(torch.int64))
     src_idss, lengths = self.sort_n_shuffle(src_idss)
-    print(len(self.dict.idx2word), self.pad_value, self.pad_value + len(self.dict.idx2word)+1)
-    # src_idss = torch.nn.utils.rnn.pad_sequence(src_idss, batch_first=True, padding_value=self.pad_value + len(self.dict.idx2word)+1)
+    # print(len(self.dict.idx2word), self.pad_value, self.pad_value + len(self.dict.idx2word)+1)
+    src_idss = torch.nn.utils.rnn.pad_sequence(src_idss, batch_first=True, padding_value=0)
     lengths = torch.tensor(lengths)
     return src_idss, lengths
 

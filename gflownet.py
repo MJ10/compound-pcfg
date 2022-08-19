@@ -113,10 +113,11 @@ class segmenter_controller():
         self.pcfg = pcfg
         self.ar_model = ar_model
         self.split_sym = n_vocab
-        if type(args) is dict:
-            self.pad_sym = n_vocab + args['t_states'] + args['nt_states'] + 1
-        else:
-            self.pad_sym = n_vocab + args.t_states + args.nt_states + 1
+        self.pad_sym = 0
+        # if type(args) is dict:
+        #     self.pad_sym = n_vocab + args['t_states'] + args['nt_states'] + 1
+        # else:
+        #     self.pad_sym = n_vocab + args.t_states + args.nt_states + 1
 
     def sample_forward(self,
                     action : str,
@@ -441,7 +442,7 @@ class segmenter_controller():
             # import pdb; pdb.set_trace();
             tag_seqs.append(seq[nt_positions].flatten() - self.n_vocab - 1)
 
-        x = torch.nn.utils.rnn.pad_sequence(spans, batch_first=True)
+        x = torch.nn.utils.rnn.pad_sequence(spans, batch_first=True, padding_value=self.pad_sym)
         lengths = torch.Tensor(list(map(len, spans))).to(x.device).long()
         # import pdb;pdb.set_trace();
         tree_lls = self.pcfg.batch_marginal_with_roots(x, lengths, torch.cat(tag_seqs, 0))

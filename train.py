@@ -54,8 +54,8 @@ def main(args):
   np.random.seed(args.seed)
   torch.manual_seed(args.seed)
   if args.minimal_dataloader:
-    corpus = MinimalDataset(args.data, 1000, batch_size=args.batch_size,
-                              batch_group_size=999999, add_master_token=False)
+    corpus = MinimalDataset(args.data, args.max_length, batch_size=args.batch_size,
+                              batch_group_size=999999, add_master_token=False, pad_value=0)
     train_data = corpus.train
     train_lens = corpus.train_lens
     # print(train_data[0])
@@ -68,7 +68,7 @@ def main(args):
         (train_data.size(0), len(train_data), val_data.size(0), len(val_data)))
   else:
     train_data = Dataset(args.train_file)
-    val_data = Dataset(args.val_file)  
+    val_data = Dataset(args.val_file)
     train_sents = train_data.batch_size.sum()
     vocab_size = int(train_data.vocab_size)
     max_len = max(val_data.sents.size(1), train_data.sents.size(1))

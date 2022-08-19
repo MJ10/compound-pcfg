@@ -26,6 +26,7 @@ parser.add_argument('--train_file', default='data/ptb-train.pkl')
 parser.add_argument('--val_file', default='data/ptb-val.pkl')
 parser.add_argument('--data', default='data/pcfg_1')
 parser.add_argument('--save_path', default='compound-pcfg.pt', help='where to save the model')
+parser.add_argument('--load_pcfg_path', default=None, type=str, help='where to save the model')
 
 # Model options
 # Generative model parameters
@@ -61,7 +62,7 @@ def main(args):
   torch.manual_seed(args.seed)
   if args.minimal_dataloader:
     corpus = MinimalDataset(args.data, args.max_length, batch_size=args.batch_size,
-                              batch_group_size=999999, add_master_token=False, pad_value=args.t_states+args.nt_states)
+                              batch_group_size=999999, add_master_token=False, pad_value=0)
     train_data = corpus.train
     train_lens = corpus.train_lens
     # print(train_data[0])
@@ -85,18 +86,23 @@ def main(args):
   print('Vocab size: %d, Max Sent Len: %d' % (vocab_size, max_len))
   print('Save Path', args.save_path)
   cuda.set_device(args.gpu)
-  model = CompPCFG(vocab = vocab_size,
-                   state_dim = args.state_dim,
-                   t_states = args.t_states,
-                   nt_states = args.nt_states,
-                   h_dim = args.h_dim,
-                   w_dim = args.w_dim,
-                   z_dim = args.z_dim)
+  
+
+  if args.load_pcfg_path is not None:
+    model = torch.load(args.load_pcfg_path)['model']
+  else:
+    model = CompPCFG(vocab = vocab_size,
+                    state_dim = args.state_dim,
+                    t_states = args.t_states,
+                    nt_states = args.nt_states,
+                    h_dim = args.h_dim,
+                    w_dim = args.w_dim,
+                    z_dim = args.z_dim)
   ar_model = ARModel(V = args.nt_states + 2,
                      num_layers = 2,
                      hidden_dim = 128)
   gfn_Z = GFlowNet_Z(args.state_dim)
-  gfn_emb = GFlowNet_shared_embedding(vocab_size+1, args.state_dim, 60, args.nt_states + args.t_states+1)
+  gfn_emb = GFlowNet_shared_embedding(vocab_size, args.state_dim, 60, args.nt_states + args.t_states+1)
   gfn_encoder = GFlowNet_encoder(args.state_dim, 4, 4*args.state_dim, 0.0, True, 4, shared_embedding=gfn_emb)
   gfn_forward_split = GFlowNet_forward_split(args.state_dim)
   gfn_forward_tag = GFlowNet_forward_tag(args.nt_states, args.state_dim)
@@ -329,7 +335,7 @@ def sample_gfn(state, controller,
               gfn_backward,
               vocab_size,
               epsilon_sample=0.):
-  pad_sym = vocab_size+args.nt_states+args.t_states+1
+  pad_sym = 0
   def done_splitting(state):
     result = []
     for padded_sent in state:
