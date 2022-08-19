@@ -106,8 +106,8 @@ def main(args):
   ar_model = ARModel(V = args.nt_states + 2,
                      num_layers = args.ar_layers,
                      hidden_dim = args.ar_dim,
-                     type=args.ar_type,
-                     n=args.ar_ngram_n)
+                     type = args.ar_type,
+                     n = args.ar_ngram_n)
   gfn_Z = GFlowNet_Z(args.state_dim)
   gfn_emb = GFlowNet_shared_embedding(vocab_size, args.state_dim, 60, args.nt_states + args.t_states+1)
   gfn_encoder = GFlowNet_encoder(args.state_dim, 4, 4*args.state_dim, 0.0, True, 4, shared_embedding=gfn_emb)
@@ -244,7 +244,7 @@ def main(args):
     print('--------------------------------')
     print('Checking validation perf...')    
     # import pdb; pdb.set_trace();
-    val_ppl, val_f1 = eval(val_data, val_lens, model, ar_model, controller, gfn_Z, gfn_encoder, gfn_forward_split, gfn_forward_tag, gfn_backward, vocab_size)
+    val_ppl, val_f1 = eval(val_data, val_lens, model, ar_model, controller, gfn_Z, gfn_encoder, gfn_forward_split, gfn_forward_tag, gfn_backward, vocab_size, corpus.dict.idx2word)
     print('--------------------------------')
     if val_ppl < best_val_ppl:
       best_val_ppl = val_ppl
@@ -260,7 +260,7 @@ def main(args):
       model.cuda()
 
 def eval(data, data_lens, model, ar_model,
-         controller, gfn_Z, gfn_encoder, gfn_forward_split, gfn_forward_tag, gfn_backward, vocab_size):
+         controller, gfn_Z, gfn_encoder, gfn_forward_split, gfn_forward_tag, gfn_backward, vocab_size, vocab):
   model.eval()
   ar_model.eval()
   num_sents = 0
@@ -293,7 +293,8 @@ def eval(data, data_lens, model, ar_model,
       state=sents
       logZ, logPF, logPB, state = sample_gfn(state, controller, gfn_Z, gfn_encoder, gfn_forward_split, gfn_forward_tag, gfn_backward,vocab_size)
       logR = controller.calc_log_reward(state)
-      print(state[0])
+      # print(state[0])
+      print(' '.join([ vocab[w] if w<vocab_size else f'[{w-vocab_size}]' for w in state[0].cpu().numpy() if w>0 ]))
       total_nll -= logR.sum().item()
       # if not args.minimal_dataloader:
       #   for b in range(batch_size):
