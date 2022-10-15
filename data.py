@@ -36,15 +36,17 @@ class MinimalDataset(object):
     self.batch_size = batch_size
     self.batch_group_size = batch_group_size
     self.add_master_token = add_master_token
-    self.pad_value = pad_value
     if not self.load_cache(path):
       self.train, self.train_lens = self.tokenize(os.path.join(path, 'train'))
       self.valid, self.valid_lens = self.tokenize(os.path.join(path, 'valid'))
       self.test, self.test_lens = self.tokenize(os.path.join(path, 'test'))
-      self.train = torch.nn.utils.rnn.pad_sequence(self.train, batch_first=True, padding_value=self.pad_value + len(self.dict.idx2word)+1)
-      self.valid = torch.nn.utils.rnn.pad_sequence(self.valid, batch_first=True, padding_value=self.pad_value + len(self.dict.idx2word)+1)
-      self.test = torch.nn.utils.rnn.pad_sequence(self.test, batch_first=True, padding_value=self.pad_value + len(self.dict.idx2word)+1)
+      self.pad_value = pad_value + len(self.dict.idx2word)
+      self.train = torch.nn.utils.rnn.pad_sequence(self.train, batch_first=True, padding_value=self.pad_value)
+      self.valid = torch.nn.utils.rnn.pad_sequence(self.valid, batch_first=True, padding_value=self.pad_value)
+      self.test = torch.nn.utils.rnn.pad_sequence(self.test, batch_first=True, padding_value=self.pad_value)
       self.save_cache(path)
+    else:
+      self.pad_value = pad_value + len(self.dict.idx2word)
     for loader in ['train', 'valid', 'test']:
       tmp_copy = getattr(self, loader)
       tmp_copy = tmp_copy[:tmp_copy.size(0)//self.batch_size*self.batch_size]
@@ -53,6 +55,7 @@ class MinimalDataset(object):
       tmp_copy = getattr(self, loader+"_lens")
       tmp_copy = tmp_copy[:tmp_copy.size(0)//self.batch_size*self.batch_size]
       setattr(self, loader + "_lens", tmp_copy.reshape(tmp_copy.size(0) // self.batch_size, self.batch_size))
+    
     # import pdb; pdb.set_trace();
 
   def sort_n_shuffle(self, dataloader):
@@ -116,7 +119,7 @@ class MinimalDataset(object):
           src_ids.append(self.dict.word2idx[word])
         src_idss.append(torch.tensor(src_ids, device=self.device).type(torch.int64))
     src_idss, lengths = self.sort_n_shuffle(src_idss)
-    print(len(self.dict.idx2word), self.pad_value, self.pad_value + len(self.dict.idx2word)+1)
+    #print(len(self.dict.idx2word), self.pad_value, self.pad_value + len(self.dict.idx2word)+1)
     # src_idss = torch.nn.utils.rnn.pad_sequence(src_idss, batch_first=True, padding_value=self.pad_value + len(self.dict.idx2word)+1)
     lengths = torch.tensor(lengths)
     return src_idss, lengths

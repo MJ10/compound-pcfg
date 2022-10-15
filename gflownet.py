@@ -106,17 +106,17 @@ class GFlowNet_backward(nn.Module):
         return pos_logits
 
 class segmenter_controller():
-    def __init__(self, device, args, n_vocab=None, pcfg=None, ar_model=None):
+    def __init__(self, device, args, n_vocab=None, pcfg=None, ar_model=None, pad_sym=None):
         self.device = device
         self.args = args
         self.n_vocab = n_vocab
         self.pcfg = pcfg
         self.ar_model = ar_model
-        self.split_sym = n_vocab
-        if type(args) is dict:
-            self.pad_sym = n_vocab + args['t_states'] + args['nt_states'] + 1
+        self.split_sym = n_vocab + 1 # +1 because of pad_sym
+        if pad_sym is None:
+            self.pad_sym = n_vocab
         else:
-            self.pad_sym = n_vocab + args.t_states + args.nt_states + 1
+            self.pad_sym = pad_sym
 
     def sample_forward(self,
                     action : str,
@@ -272,7 +272,7 @@ class segmenter_controller():
                 states[i] = torch.cat([states[i][:pos+1], torch.zeros(1).to(self.device)+self.split_sym, states[i][pos+1:]], dim=0).long()
             elif action == "tag":
                 # change the pos-th split symbol to tok
-                states[i][pos] = tok+self.n_vocab+1 # need to verify that this actually modifies states
+                states[i][pos] = tok+self.split_sym+1 # need to verify that this actually modifies states
         return states
 
     @torch.no_grad()
@@ -435,15 +435,15 @@ class segmenter_controller():
         tag_seqs = []
         seqs = [sent[sent!=self.pad_sym] for sent in seqs]
         for seq in seqs:
-            nt_positions = torch.nonzero(seq > self.n_vocab)
+            nt_positions = torch.nonzero(seq > self.pad_sym)
             p = [-1] + nt_positions.cpu().numpy().flatten().tolist()
             spans += [ seq[p[i]+1:p[i+1]] for i in range(len(p) - 1) ]
-            # import pdb; pdb.set_trace();
-            tag_seqs.append(seq[nt_positions].flatten() - self.n_vocab - 1)
+            #import pdb; pdb.set_trace();
+            tag_seqs.append(seq[nt_positions].flatten() - self.n_vocab - 2)
 
         x = torch.nn.utils.rnn.pad_sequence(spans, batch_first=True)
         lengths = torch.Tensor(list(map(len, spans))).to(x.device).long()
-        # import pdb;pdb.set_trace();
+        #import pdb;pdb.set_trace();
         tree_lls = self.pcfg.batch_marginal_with_roots(x, lengths, torch.cat(tag_seqs, 0))
 
         pad_value = self.args.nt_states+1
@@ -483,8 +483,9 @@ class segmenter_ltr_controller(segmenter_controller):
             elif F_actions[0][i] == "split":
                 mask = torch.zeros(state.size()).to(self.device)
                 # mask[state>=self.split_sym] = -100
-                split_idx = (state==self.split_sym).nonzero()
-                mask[:split_idx[-1]+1] = -100 # no more cuts to the left
+                split_idx = (state>=self.split_sym).nonzero()
+                if len(split_idx) > 0:
+                    mask[:split_idx[-1]+1] = -100 # no more cuts to the left
                 right_one = split_idx + 1
                 right_one = right_one[right_one < state.size(-1)]
                 mask[right_one] = -100
@@ -519,7 +520,7 @@ class segmenter_ltr_controller(segmenter_controller):
         for i, state in enumerate(states):
             if action == "split":
                 # if sf, add none to actions
-                if state[state!=self.pad_sym][-1] == self.split_sym:
+                if state[state!=self.pad_sym][-1] >= self.split_sym:
                     actions.append('none')
                     positions.append(0)
                     tokens.append(0)
@@ -530,8 +531,9 @@ class segmenter_ltr_controller(segmenter_controller):
                 # 2. mask one token after every split symbol
                 # 3. the last token is always unmasked
                 mask = torch.zeros(state.size()).to(self.device)
-                split_idx = (state==self.split_sym).nonzero()
-                mask[:split_idx[-1]+1] = -100 # no more cuts to the left
+                split_idx = (state>=self.split_sym).nonzero()
+                if len(split_idx) > 0:
+                    mask[:split_idx[-1]+1] = -100 # no more cuts to the left
                 right_one = split_idx + 1
                 right_one = right_one[right_one < state.size(-1)]
                 mask[right_one] = -100

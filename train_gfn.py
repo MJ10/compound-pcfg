@@ -64,7 +64,7 @@ def main(args):
   torch.manual_seed(args.seed)
   if args.minimal_dataloader:
     corpus = MinimalDataset(args.data, args.max_length, batch_size=args.batch_size,
-                              batch_group_size=999999, add_master_token=False, pad_value=args.t_states+args.nt_states)
+                              batch_group_size=999999, add_master_token=False, pad_value=0)
     train_data = corpus.train
     train_lens = corpus.train_lens
     # print(train_data[0])
@@ -99,15 +99,15 @@ def main(args):
                      num_layers = 2,
                      hidden_dim = 128)
   gfn_Z = GFlowNet_Z(args.state_dim)
-  gfn_emb = GFlowNet_shared_embedding(vocab_size+1, args.state_dim, 60, args.nt_states + args.t_states+1)
+  gfn_emb = GFlowNet_shared_embedding(vocab_size+1, args.state_dim, 128, args.nt_states + args.t_states+1)
   gfn_encoder = GFlowNet_encoder(args.state_dim, 4, 4*args.state_dim, 0.0, True, 4, shared_embedding=gfn_emb)
   gfn_forward_split = GFlowNet_forward_split(args.state_dim)
   gfn_forward_tag = GFlowNet_forward_tag(args.nt_states, args.state_dim)
   gfn_backward = GFlowNet_backward(args.state_dim)
   if args.ltr:
-    controller = segmenter_ltr_controller(device, args, vocab_size, model, ar_model)
+    controller = segmenter_ltr_controller(device, args, vocab_size, model, ar_model, pad_sym=corpus.pad_value)
   else:
-    controller = segmenter_controller(device, args, vocab_size, model, ar_model)
+    controller = segmenter_controller(device, args, vocab_size, model, ar_model, pad_sym=corpus.pad_value)
   for name, param in model.named_parameters():    
     if param.dim() > 1:
       xavier_uniform_(param)
@@ -300,7 +300,7 @@ def eval(data, data_lens, model, ar_model,
         logZ, logPF, logPB, state = \
           sample_gfn_forward(state, controller, gfn_Z, gfn_encoder, gfn_forward_split, gfn_forward_tag, gfn_backward,vocab_size)
       logR = controller.calc_log_reward(state)
-      print(state[0])
+      print(state[0][state[0]!=controller.pad_sym])
       total_nll -= logR.sum().item()
       # if not args.minimal_dataloader:
       #   for b in range(batch_size):
@@ -349,20 +349,11 @@ def sample_gfn_ltr_forward(state, controller,
               gfn_backward,
               vocab_size,
               epsilon_sample=0.):
-  pad_sym = vocab_size+args.nt_states+args.t_states+1
+  pad_sym = controller.pad_sym #vocab_size+args.nt_states+args.t_states+1
   def done_splitting(state):
     result = []
     for padded_sent in state:
-      if padded_sent[padded_sent!=pad_sym][-1] == vocab_size:
-        result.append(True)
-      else:
-        result.append(False)
-    return result
-  
-  def done_tagging(state):
-    result = []
-    for padded_sent in state:
-      if padded_sent[padded_sent==vocab_size].sum() == 0:
+      if padded_sent[padded_sent!=pad_sym][-1] >= vocab_size:
         result.append(True)
       else:
         result.append(False)
@@ -395,6 +386,7 @@ def sample_gfn_ltr_forward(state, controller,
                                           temperature_pos=eff_temp_pos,)
     pad_mask = torch.zeros_like(state).to(torch.float)
     pad_mask[state==pad_sym] = -float('inf')
+    #print(state, pad_mask)
     encoded_sents = gfn_encoder(state, pad_mask)
     _logPB = controller.calc_backward_prob(gfn_backward(encoded_sents),
                                           state,
