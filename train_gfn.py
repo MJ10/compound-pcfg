@@ -22,8 +22,10 @@ from gflownet import *
 parser = argparse.ArgumentParser()
 
 # Data path options
+# used for non-minimal dataloader
 parser.add_argument('--train_file', default='data/ptb-train.pkl')
 parser.add_argument('--val_file', default='data/ptb-val.pkl')
+# used for minimal dataloader
 parser.add_argument('--data', default='data/pcfg_1')
 parser.add_argument('--save_path', default='compound-pcfg.pt', help='where to save the model')
 
@@ -55,6 +57,7 @@ parser.add_argument('--temperature_pos', default=1., type=float)
 parser.add_argument('--temperature_tok', default=1., type=float)
 parser.add_argument('--epsilon_sample', default=0., type=float)
 parser.add_argument('--tb_threshold', default=999., type=float)
+parser.add_argument('--ltr', action="store_true")
 
 def main(args):
   np.random.seed(args.seed)
@@ -101,7 +104,10 @@ def main(args):
   gfn_forward_split = GFlowNet_forward_split(args.state_dim)
   gfn_forward_tag = GFlowNet_forward_tag(args.nt_states, args.state_dim)
   gfn_backward = GFlowNet_backward(args.state_dim)
-  controller = segmenter_controller(device, args, vocab_size, model, ar_model)
+  if args.ltr:
+    controller = segmenter_ltr_controller(device, args, vocab_size, model, ar_model)
+  else:
+    controller = segmenter_controller(device, args, vocab_size, model, ar_model)
   for name, param in model.named_parameters():    
     if param.dim() > 1:
       xavier_uniform_(param)
@@ -168,13 +174,22 @@ def main(args):
       # sample GFlowNet for sequence
       # state = torch.nn.utils.rnn.pad_sequence(sents, batch_first=True, padding_value=vocab_size+args.t_states+args.nt_states)
       state = sents
-      logZ, logPF, logPB, state = sample_gfn(state, controller,
-                                            gfn_Z, gfn_encoder,
-                                            gfn_forward_split,
-                                            gfn_forward_tag,
-                                            gfn_backward,
-                                            vocab_size,
-                                            epsilon_sample=args.epsilon_sample)
+      if args.ltr:
+        logZ, logPF, logPB, state = sample_gfn_ltr_forward(state, controller,
+                                              gfn_Z, gfn_encoder,
+                                              gfn_forward_split,
+                                              gfn_forward_tag,
+                                              gfn_backward,
+                                              vocab_size,
+                                              epsilon_sample=args.epsilon_sample)
+      else:
+        logZ, logPF, logPB, state = sample_gfn_forward(state, controller,
+                                              gfn_Z, gfn_encoder,
+                                              gfn_forward_split,
+                                              gfn_forward_tag,
+                                              gfn_backward,
+                                              vocab_size,
+                                              epsilon_sample=args.epsilon_sample)
       # print(state[0])
       logR = controller.calc_log_reward(state)
       tb_loss = ((logZ + logPF - logPB - logR.detach()) ** 2).mean()
@@ -278,7 +293,12 @@ def eval(data, data_lens, model, ar_model,
       # state = torch.nn.utils.rnn.pad_sequence(sents, batch_first=True, padding_value=vocab_size+args.t_states+args.nt_states)
       # sample GFlowNet for sequence
       state=sents
-      logZ, logPF, logPB, state = sample_gfn(state, controller, gfn_Z, gfn_encoder, gfn_forward_split, gfn_forward_tag, gfn_backward,vocab_size)
+      if args.ltr:
+        logZ, logPF, logPB, state = \
+          sample_gfn_ltr_forward(state, controller, gfn_Z, gfn_encoder, gfn_forward_split, gfn_forward_tag, gfn_backward,vocab_size)
+      else:
+        logZ, logPF, logPB, state = \
+          sample_gfn_forward(state, controller, gfn_Z, gfn_encoder, gfn_forward_split, gfn_forward_tag, gfn_backward,vocab_size)
       logR = controller.calc_log_reward(state)
       print(state[0])
       total_nll -= logR.sum().item()
@@ -322,7 +342,89 @@ def eval(data, data_lens, model, ar_model,
   ar_model.train()
   return ppl_elbo, sent_f1*100 if not args.minimal_dataloader else 0
 
-def sample_gfn(state, controller, 
+def sample_gfn_ltr_forward(state, controller, 
+              gfn_Z, gfn_encoder,
+              gfn_forward_split,
+              gfn_forward_tag,
+              gfn_backward,
+              vocab_size,
+              epsilon_sample=0.):
+  pad_sym = vocab_size+args.nt_states+args.t_states+1
+  def done_splitting(state):
+    result = []
+    for padded_sent in state:
+      if padded_sent[padded_sent!=pad_sym][-1] == vocab_size:
+        result.append(True)
+      else:
+        result.append(False)
+    return result
+  
+  def done_tagging(state):
+    result = []
+    for padded_sent in state:
+      if padded_sent[padded_sent==vocab_size].sum() == 0:
+        result.append(True)
+      else:
+        result.append(False)
+    return result
+  
+  pad_mask = torch.zeros_like(state).to(torch.float)
+  pad_mask[state==pad_sym] = -float('inf')
+  logPF = torch.zeros(state.shape[0], device=device)
+  logPB = torch.zeros(state.shape[0], device=device)
+  # Phase I:
+  #  - get logZ
+  try:
+    encoded_sents = gfn_encoder(state, pad_mask)
+  except Exception as e:
+    import pdb; pdb.set_trace();
+    encoded_sents = gfn_encoder(state, pad_mask)
+  logZ = gfn_Z(encoded_sents, pad_mask)
+  # Phase II:
+  #  - split the seqs until the last token is a split symbol
+  while not all(done_splitting(state)):
+    eff_temp_pos = args.temperature_pos
+    eff_temp_tok = args.temperature_tok
+    if random.random() < epsilon_sample:
+      eff_temp_pos = 100
+      eff_temp_tok = 100
+    state, _, B_actions, _logPF = \
+                controller.sample_forward('split',
+                                          gfn_forward_split(encoded_sents),
+                                          state,
+                                          temperature_pos=eff_temp_pos,)
+    pad_mask = torch.zeros_like(state).to(torch.float)
+    pad_mask[state==pad_sym] = -float('inf')
+    encoded_sents = gfn_encoder(state, pad_mask)
+    _logPB = controller.calc_backward_prob(gfn_backward(encoded_sents),
+                                          state,
+                                          B_actions)
+    # encoded_sents = gfn_encoder(state, pad_mask)
+    # state = new_state
+    logPF += _logPF
+    logPB += _logPB
+    # tag the new split symbol
+    eff_temp_pos = args.temperature_pos
+    eff_temp_tok = args.temperature_tok
+    if random.random() < epsilon_sample:
+      eff_temp_pos = 100
+      eff_temp_tok = 100
+    state, _, B_actions, _logPF = \
+                controller.sample_forward('tag',
+                                          gfn_forward_tag(encoded_sents),
+                                          state,
+                                          temperature_pos=eff_temp_pos,
+                                          temperature_tok=eff_temp_tok)
+    encoded_sents = gfn_encoder(state, pad_mask)
+    _logPB = controller.calc_backward_prob(gfn_backward(encoded_sents),
+                                          state,
+                                          B_actions)
+    encoded_sents = gfn_encoder(state, pad_mask)
+    logPF += _logPF
+    logPB += _logPB
+  return logZ, logPF, logPB, state
+
+def sample_gfn_forward(state, controller, 
               gfn_Z, gfn_encoder,
               gfn_forward_split,
               gfn_forward_tag,
